@@ -1,0 +1,987 @@
+package wootbeer.descent2;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.res.Resources;
+import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Point;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.media.MediaPlayer;
+import android.net.Uri;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Process;
+import android.provider.DocumentsContract;
+import android.util.DisplayMetrics;
+import android.view.Display;
+import android.view.Gravity;
+import android.view.Surface;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.Toast;
+import android.widget.TextView;
+
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+public class DescentActivity extends Activity implements SensorEventListener {
+	// Descent II's own game data files -- Parallax's copyrighted DESCENT2.HOG/.HAM/.S22 etc. are no
+	// longer bundled in the APK. Instead the user picks the folder containing their own copy
+	// via Storage Access Framework, and we copy the two files into our private app storage.
+	// Each row is one required file; a row with several names is satisfied by any one of them
+	// (the 22kHz or 11kHz sound bank). Without all of these the game can't start.
+	private static final String[][] REQUIRED_DATA_FILES = {
+			{"DESCENT2.HOG"},
+			{"DESCENT2.HAM"},
+			{"DESCENT2.S22", "DESCENT2.S11"},
+			{"GROUPA.PIG"},
+	};
+	// Copied too when they are present, but the game can start without them (the extra level
+	// texture sets for the later groups, and the cutscene movie libraries).
+	private static final String[] OPTIONAL_DATA_FILES = {
+			"ALIEN1.PIG", "ALIEN2.PIG", "FIRE.PIG", "ICE.PIG", "WATER.PIG",
+			"INTRO-H.MVL", "INTRO-L.MVL", "OTHER-H.MVL", "OTHER-L.MVL", "ROBOTS-H.MVL", "ROBOTS-L.MVL",
+	};
+	private static final String DATA_FILENAME_HOG = "DESCENT2.HOG";
+	private static final int REQUEST_CODE_OPEN_DATA_FOLDER = 4242;
+	// Add-on mission packs (NAME.MN2 + NAME.HOG) are picked on demand from the in-game
+	// Options menu (see openMissionPackPicker() below), or imported along with the base
+	// game data during first-run setup.
+	private static final int REQUEST_CODE_ADD_MISSION_PACKS = 4243;
+
+	// How many times the physical display resolution to render at -- set from the game's own
+	// title-screen "Detail Level Customization" menu (see setRenderScaleIndex() below).
+	private static final String PREFS_NAME = "descent_settings";
+	private static final String PREF_RENDER_SCALE = "render_scale_index";
+	private static final float[] RENDER_SCALE_OPTIONS = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
+
+	// "Force 4:3" -- set from the game's own title-screen "Detail Level Customization" menu
+	// (see setAspectRatio43() below). Like render scale, this reshapes the render surface
+	// itself, which can only safely happen once at app startup.
+	private static final String PREF_ASPECT_RATIO_43 = "aspect_ratio_43";
+
+	// Set right before this app kills and relaunches itself (see restartAppForSettingsChange()
+	// below) so the fresh launch knows to resume seamlessly instead of showing the intro logos
+	// and pilot picker again -- see launchGame() below and the "-quickresume" native arg it
+	// passes into descentMain().
+	private static final String PREF_QUICK_RESUME = "pending_quickresume";
+
+	private DescentView descentView;
+	private MediaPlayer mediaPlayer;
+	private Sensor gyroscopeSensor;
+	private SensorManager sensorManager;
+	private float buttonSizeBias;
+	// Starts as zeros (not null) so native getRotationRate() never sees a null array in the gap between
+	// turning the gyroscope on and the first sensor event arriving.
+	private float acceleration[] = new float[3];
+	private int mediaPlayerPosition;
+	private int refreshPeriodUs;
+
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		DisplayMetrics metrics;
+		Resources resources;
+
+		super.onCreate(savedInstanceState);
+
+		// Enable immersive mode and make sure it's enabled whenever we're fullscreen
+		setImmersive();
+		if (Build.VERSION.SDK_INT >= 19) {
+			getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(
+					new View.OnSystemUiVisibilityChangeListener() {
+						@Override
+						public void onSystemUiVisibilityChange(int visibility) {
+							if ((visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
+								setImmersive();
+							}
+						}
+					});
+		}
+
+		// Calculate button size bias; want slightly bigger touch controls on genuinely bigger
+		// (tablet-class) screens, without inflating them on an ordinary phone.
+		//
+		// This used to be a single divide-by-5.5-then-clamp-to-1.4 formula, tuned against
+		// phones from around when this port was written (~2016, typically 4.5-5.5" diagonal).
+		// Phones have gotten bigger since -- a normal 6-7" phone today has a landscape
+		// width+height-in-inches sum well past that formula's old threshold, so it was hitting
+		// its max 1.4x bonus on nearly every current phone, not just tablets. Layered on top of
+		// today's much higher typical screen density, on-screen touch controls sized in dp (see
+		// dpToPx()/pxToDp() below, and their only other caller, controls.c's init_buttons())
+		// were coming out 3-3.5x their nominal dp size instead of the ~2-2.5x this was likely
+		// designed around -- ballooning into a checkerboard that swallowed most of the screen
+		// on modern phone hardware.
+		//
+		// Below PHONE_SIZE_IN (typical big-phone landscape sum), no bonus at all -- bias stays
+		// 1.0, so dpToPx()/pxToDp() are plain, unmodified density conversions and on-screen
+		// button dp sizes mean exactly what they say. From there it ramps linearly up to
+		// MAX_BIAS by TABLET_SIZE_IN (roughly an 8-10" tablet) and clamps at that beyond.
+		final float PHONE_SIZE_IN = 9.5f;
+		final float TABLET_SIZE_IN = 14.0f;
+		final float MAX_BIAS = 1.15f;
+		resources = getResources();
+		metrics = resources.getDisplayMetrics();
+		float sumInches = metrics.widthPixels / metrics.xdpi + metrics.heightPixels / metrics.ydpi;
+		float t = (sumInches - PHONE_SIZE_IN) / (TABLET_SIZE_IN - PHONE_SIZE_IN);
+		buttonSizeBias = (float) Math.min(Math.max(1.0f + t * (MAX_BIAS - 1.0f), 1.0f), MAX_BIAS);
+
+		// Set up gyroscope
+		sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+		if (sensorManager != null) {
+			gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+		}
+
+		// If we're on SDK 11, absolute values are supported for gyro refresh period. Use the screen's refresh rate to
+		// determine refresh period.
+		if (Build.VERSION.SDK_INT >= 11) {
+			final Display display = ((WindowManager) getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
+			final float refreshRate = display.getRefreshRate();
+			refreshPeriodUs = (int) (1.0 / refreshRate * 1000000);
+		}
+
+		// Create media player for MIDI
+		mediaPlayer = new MediaPlayer();
+
+		if (haveRequiredDataFiles()) {
+			launchGame();
+		} else {
+			showDataPicker(null);
+		}
+	}
+
+	/**
+	 * Creates the OpenGL ES view and starts the native game engine. Only safe to call once
+	 * the required Descent II data files are present in {@link #getFilesDir()}.
+	 */
+	private void launchGame() {
+		// True only for the single launch immediately following a settings-triggered restart
+		// (see restartAppForSettingsChange() below) -- clear it immediately so it can't
+		// accidentally stick around and affect a later, normal launch.
+		boolean quickResume = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_QUICK_RESUME, false);
+		if (quickResume) {
+			getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(PREF_QUICK_RESUME).apply();
+		}
+
+		descentView = new DescentView(this, RENDER_SCALE_OPTIONS[getRenderScaleIndex()], quickResume);
+
+		if (getAspectRatio43()) {
+			// Give the SurfaceView a genuine 4:3 shape instead of letting it fill the whole
+			// screen, and center it over a black background -- the rest of the screen (the
+			// bars on the sides on a wider device) is just this container's background
+			// showing through. DescentView itself doesn't need to know about any of this: it
+			// sizes its render buffer from its own actual on-screen size (see
+			// DescentView.surfaceCreated()), so it automatically renders correctly into
+			// whatever shape it's given here, exactly like it already does for a full-screen
+			// Normal-mode view.
+			WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+			Display display = wm.getDefaultDisplay();
+			Point displaySize = new Point();
+			if (Build.VERSION.SDK_INT >= 19) {
+				display.getRealSize(displaySize);
+			} else {
+				display.getSize(displaySize);
+			}
+
+			// Largest true 4:3 rectangle that fits within the physical screen -- keep the
+			// full height and narrow the width on a device wider than 4:3 (bars on the
+			// sides, e.g. this device), or the reverse if a device is ever narrower than 4:3.
+			int fitWidth = displaySize.y * 4 / 3;
+			int fitHeight = displaySize.x * 3 / 4;
+			int viewWidth, viewHeight;
+			if (fitWidth <= displaySize.x) {
+				viewWidth = fitWidth;
+				viewHeight = displaySize.y;
+			} else {
+				viewWidth = displaySize.x;
+				viewHeight = fitHeight;
+			}
+
+			FrameLayout container = new FrameLayout(this);
+			container.setBackgroundColor(Color.BLACK);
+			container.addView(descentView, new FrameLayout.LayoutParams(viewWidth, viewHeight, Gravity.CENTER));
+			setContentView(container);
+		} else {
+			setContentView(descentView);
+		}
+
+		// Keep the screen from going to sleep
+		getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+	}
+
+	// --- Render scale (supersampling for a sharper image) -----------------------------------
+	// Set from the game's own title-screen "Detail Level Customization" menu (see
+	// do_detail_level_menu_custom() in main/menu.c) via the setRenderScaleIndex() JNI call
+	// below. Not offered from the in-game pause menu, since this engine only sizes its render
+	// buffer once at startup -- a new value here only takes effect on the next app launch.
+
+	private int getRenderScaleIndex() {
+		int index = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_RENDER_SCALE, 0);
+		return (index >= 0 && index < RENDER_SCALE_OPTIONS.length) ? index : 0;
+	}
+
+	@SuppressWarnings("unused")
+	private void setRenderScaleIndex(int index) {
+		if (index < 0 || index >= RENDER_SCALE_OPTIONS.length) {
+			return;
+		}
+		// commit(), not apply() -- do_detail_level_menu_custom() (main/menu.c) can trigger
+		// restartAppForSettingsChange() moments after this returns, which kills this process.
+		// apply()'s write to disk happens asynchronously on a background thread; if that
+		// hadn't finished flushing yet when the process died, the change would be silently
+		// lost and the next launch would come back up with the old value -- exactly what was
+		// happening before this was commit().
+		getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_RENDER_SCALE, index).commit();
+	}
+
+	// --- Force 4:3 (pillarboxed aspect ratio) ------------------------------------------------
+	// Set from the same title-screen "Detail Level Customization" menu (see
+	// do_detail_level_menu_custom() in main/menu.c) via the setAspectRatio43() JNI call below.
+	// Not offered from the in-game pause menu, since this engine only sizes/shapes its render
+	// surface once at startup -- a new value here only takes effect on the next app launch.
+
+	private boolean getAspectRatio43() {
+		return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_ASPECT_RATIO_43, false);
+	}
+
+	@SuppressWarnings("unused")
+	private void setAspectRatio43(boolean enabled) {
+		// commit(), not apply() -- see the comment in setRenderScaleIndex() above; the same
+		// restart-can-follow-almost-immediately race applies here.
+		getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_ASPECT_RATIO_43, enabled).commit();
+	}
+
+	// --- Settings-triggered close ------------------------------------------------------------
+	// Render Scale and Force 4:3 above both reshape the render surface, which this old engine
+	// only ever sets up once at process startup -- there's no way to apply either one without a
+	// fresh process. Auto-relaunching to the foreground automatically was tried a few different
+	// ways (a direct startActivity()+kill, then an AlarmManager-scheduled one) and none landed
+	// reliably: this Activity is android:launchMode="singleTask", so a same-process relaunch
+	// attempt just raced our own still-running instance, and even once that race was removed,
+	// Android's background-activity-start restrictions kept the relaunch from reliably coming to
+	// the foreground -- it landed minimized in Recents instead. Chasing full reliability there
+	// means fighting a deliberate, version-shifting OS security boundary, not fixing a bug.
+	//
+	// So instead: the native side (see the restartAppForSettingsChange() JNI shim in motion.c)
+	// shows the player a quick in-game message explaining what's about to happen, then calls
+	// this, which marks PREF_QUICK_RESUME (so the player's next manual launch still skips the
+	// intro logos and pilot picker and lands back on the main menu -- still quick, just not
+	// automatic) and closes the app outright.
+
+	@SuppressWarnings("unused")
+	private void restartAppForSettingsChange() {
+		// commit(), not apply() -- the process is about to die, so this write needs to actually
+		// be on disk before that happens rather than queued on a background thread that dies
+		// with it.
+		getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_QUICK_RESUME, true).commit();
+
+		// This app has no graceful Android shutdown path anywhere else -- normal quit already
+		// goes straight from native code to exit(0) with no Activity lifecycle involved (see
+		// main/inferno.c). Killing the process directly here is consistent with that.
+		Process.killProcess(Process.myPid());
+	}
+
+	// --- User-supplied game data (Storage Access Framework) --------------------------------
+
+	private void showDataPicker(String errorMessage) {
+		LinearLayout layout = new LinearLayout(this);
+		layout.setOrientation(LinearLayout.VERTICAL);
+		layout.setGravity(Gravity.CENTER);
+		layout.setBackgroundColor(Color.BLACK);
+		int pad = (int) dpToPx(24);
+		layout.setPadding(pad, pad, pad, pad);
+
+		TextView title = new TextView(this);
+		title.setText("Descent II game data needed");
+		title.setTextColor(Color.WHITE);
+		title.setTextSize(22);
+		title.setGravity(Gravity.CENTER);
+		layout.addView(title);
+
+		TextView message = new TextView(this);
+		message.setText("Select the folder that contains your own copy of the Descent II data files " +
+				"(DESCENT2.HOG, DESCENT2.HAM, DESCENT2.S22 or .S11, GROUPA.PIG, plus the other .PIG and .MVL files).\n\n" +
+				"Any add-on mission packs (.MN2 + .HOG files) in that folder will be imported too. " +
+				"You can add more later from Options > Add Mission Packs.");
+		message.setTextColor(Color.LTGRAY);
+		message.setGravity(Gravity.CENTER);
+		message.setPadding(0, (int) dpToPx(16), 0, (int) dpToPx(16));
+		layout.addView(message);
+
+		if (errorMessage != null) {
+			TextView error = new TextView(this);
+			error.setText(errorMessage);
+			error.setTextColor(Color.rgb(255, 120, 120));
+			error.setGravity(Gravity.CENTER);
+			error.setPadding(0, 0, 0, (int) dpToPx(16));
+			layout.addView(error);
+		}
+
+		Button chooseButton = new Button(this);
+		chooseButton.setText("Choose Folder");
+		chooseButton.setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View v) {
+				openFolderPicker();
+			}
+		});
+		layout.addView(chooseButton);
+
+		setContentView(layout);
+	}
+
+	private void showCopyingProgress() {
+		LinearLayout layout = new LinearLayout(this);
+		layout.setOrientation(LinearLayout.VERTICAL);
+		layout.setGravity(Gravity.CENTER);
+		layout.setBackgroundColor(Color.BLACK);
+
+		ProgressBar progressBar = new ProgressBar(this);
+		layout.addView(progressBar);
+
+		TextView text = new TextView(this);
+		text.setText("Copying game data...");
+		text.setTextColor(Color.WHITE);
+		text.setGravity(Gravity.CENTER);
+		text.setPadding(0, (int) dpToPx(16), 0, 0);
+		layout.addView(text);
+
+		setContentView(layout);
+	}
+
+	private void openFolderPicker() {
+		if (Build.VERSION.SDK_INT < 21) {
+			showDataPicker("This Android version can't select external files. Please update the app's " +
+					"bundled assets instead.");
+			return;
+		}
+		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+		startActivityForResult(intent, REQUEST_CODE_OPEN_DATA_FOLDER);
+	}
+
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		super.onActivityResult(requestCode, resultCode, data);
+		if (requestCode == REQUEST_CODE_OPEN_DATA_FOLDER) {
+			if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+				// User cancelled -- leave the picker screen showing so they can try again.
+				return;
+			}
+			copyDataFilesFromTree(data.getData());
+		} else if (requestCode == REQUEST_CODE_ADD_MISSION_PACKS) {
+			if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+				return;
+			}
+			importMissionPacksInBackground(data.getData());
+		}
+	}
+
+	private void copyDataFilesFromTree(final Uri treeUri) {
+		showCopyingProgress();
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				final String error = doCopyDataFiles(treeUri);
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						if (error != null) {
+							showDataPicker(error);
+						} else {
+							launchGame();
+						}
+					}
+				});
+			}
+		}).start();
+	}
+
+	/** True when every required data file is already in app storage. */
+	private boolean haveRequiredDataFiles() {
+		for (String[] names : REQUIRED_DATA_FILES) {
+			boolean found = false;
+			for (String name : names) {
+				if (new File(getFilesDir(), name).exists()) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Runs on a background thread. Returns null on success, or a user-facing error message.
+	 */
+	private String doCopyDataFiles(Uri treeUri) {
+		List<String> destNames = new ArrayList<String>();
+		List<Uri> sources = new ArrayList<Uri>();
+		StringBuilder missing = new StringBuilder();
+
+		for (String[] names : REQUIRED_DATA_FILES) {
+			boolean any = false;
+			// Copy every alternative that is present (e.g. both .S22 and .S11 if both exist).
+			for (String name : names) {
+				Uri uri = findChildDocument(treeUri, name);
+				if (uri != null) {
+					destNames.add(name);
+					sources.add(uri);
+					any = true;
+				}
+			}
+			if (!any) {
+				if (missing.length() > 0) missing.append(", ");
+				missing.append(names[0]);
+				for (int k = 1; k < names.length; k++) missing.append(" or ").append(names[k]);
+			}
+		}
+		if (missing.length() > 0) {
+			return "Couldn't find " + missing + " in that folder. Please pick the folder that contains your Descent II data files.";
+		}
+		for (String name : OPTIONAL_DATA_FILES) {
+			Uri uri = findChildDocument(treeUri, name);
+			if (uri != null) {
+				destNames.add(name);
+				sources.add(uri);
+			}
+		}
+
+		List<File> temps = new ArrayList<File>();
+		try {
+			for (int k = 0; k < destNames.size(); k++) {
+				File temp = new File(getFilesDir(), destNames.get(k) + ".tmp");
+				temps.add(temp);
+				copyUriToFile(sources.get(k), temp);
+			}
+			for (int k = 0; k < destNames.size(); k++) {
+				File dest = new File(getFilesDir(), destNames.get(k));
+				//noinspection ResultOfMethodCallIgnored
+				dest.delete();
+				if (!temps.get(k).renameTo(dest)) {
+					return "Couldn't finish copying the data files. Please try again.";
+				}
+			}
+			// Best effort: bring along any add-on mission packs sitting in the same folder.
+			// A problem here must never block the base game from starting.
+			try {
+				importMissionPacks(treeUri);
+			} catch (RuntimeException ignored) {
+			}
+			return null;
+		} catch (IOException e) {
+			for (File temp : temps) {
+				//noinspection ResultOfMethodCallIgnored
+				temp.delete();
+			}
+			return "Couldn't copy the data files: " + e.getMessage();
+		}
+	}
+
+	private Uri findChildDocument(Uri treeUri, String displayName) {
+		String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
+		Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId);
+		Cursor cursor = getContentResolver().query(childrenUri, new String[]{
+				DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+				DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null);
+		if (cursor == null) {
+			return null;
+		}
+		try {
+			while (cursor.moveToNext()) {
+				String name = cursor.getString(1);
+				if (displayName.equalsIgnoreCase(name)) {
+					String docId = cursor.getString(0);
+					return DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+				}
+			}
+		} finally {
+			cursor.close();
+		}
+		return null;
+	}
+
+	private void copyUriToFile(Uri uri, File destination) throws IOException {
+		InputStream in = null;
+		OutputStream out = null;
+		try {
+			in = getContentResolver().openInputStream(uri);
+			if (in == null) {
+				throw new IOException("could not open " + uri);
+			}
+			out = new FileOutputStream(destination);
+			byte[] buffer = new byte[64 * 1024];
+			int read;
+			while ((read = in.read(buffer)) != -1) {
+				out.write(buffer, 0, read);
+			}
+			out.flush();
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (IOException ignored) {
+				}
+			}
+			if (out != null) {
+				try {
+					out.close();
+				} catch (IOException ignored) {
+				}
+			}
+		}
+	}
+
+
+	// --- Add-on mission packs ----------------------------------------------------------------
+
+	/**
+	 * Called from native code (see openMissionPackPicker() in motion.c) when the player chooses
+	 * Options > Add Mission Packs. Shows the system folder picker over the running game; the
+	 * chosen folder is then scanned for .MN2 / .HOG files and they are copied into app storage.
+	 */
+	@SuppressWarnings("unused")
+	private void openMissionPackPicker() {
+		runOnUiThread(new Runnable() {
+			@Override
+			public void run() {
+				if (Build.VERSION.SDK_INT < 21) {
+					Toast.makeText(DescentActivity.this,
+							"This Android version can't select external files.", Toast.LENGTH_LONG).show();
+					return;
+				}
+				try {
+					Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+					startActivityForResult(intent, REQUEST_CODE_ADD_MISSION_PACKS);
+				} catch (RuntimeException e) {
+					Toast.makeText(DescentActivity.this,
+							"Couldn't open the folder picker.", Toast.LENGTH_LONG).show();
+				}
+			}
+		});
+	}
+
+	private void importMissionPacksInBackground(final Uri treeUri) {
+		Toast.makeText(this, "Importing mission packs...", Toast.LENGTH_SHORT).show();
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				String result;
+				try {
+					result = importMissionPacks(treeUri);
+				} catch (RuntimeException e) {
+					result = "Couldn't import mission packs: " + e.getMessage();
+				}
+				final String message = result;
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						Toast.makeText(DescentActivity.this, message, Toast.LENGTH_LONG).show();
+					}
+				});
+			}
+		}).start();
+	}
+
+	/** A file found while walking a picked folder. */
+	private static class PackFile {
+		Uri uri;
+		String destName;
+		long size;
+		boolean music;		// a Redbook track: destName is "music/NN.ext"
+	}
+
+	/**
+	 * If an (upper-cased) file name looks like a Redbook CD track -- it starts with the two-digit
+	 * track number and has an audio extension, e.g. "02.ogg" or "04 Level Music.mp3" -- returns
+	 * the name it is stored under ("music/02.ogg"), otherwise null.
+	 */
+	private static String musicDestName(String upperName) {
+		if (upperName.length() < 6 || !Character.isDigit(upperName.charAt(0)) || !Character.isDigit(upperName.charAt(1))) {
+			return null;
+		}
+		int dot = upperName.lastIndexOf('.');
+		if (dot < 2) {
+			return null;
+		}
+		String ext = upperName.substring(dot + 1);
+		if (!ext.matches("OGG|MP3|WAV|FLAC|M4A|AAC|OPUS")) {
+			return null;
+		}
+		return "music/" + upperName.substring(0, 2) + "." + ext.toLowerCase(Locale.US);
+	}
+
+	/**
+	 * Runs on a background thread. Finds every .MN2 / .HOG file in the picked folder (and up to
+	 * two levels of subfolders -- packs are often distributed as a folder), and copies them into
+	 * app storage under upper-case names. DESCENT2.HOG is never touched. Returns a short
+	 * user-facing summary.
+	 */
+	private String importMissionPacks(Uri treeUri) {
+		List<PackFile> found = new ArrayList<PackFile>();
+		String rootId = DocumentsContract.getTreeDocumentId(treeUri);
+		collectPackFiles(treeUri, rootId, 0, found);
+
+		int mn2Copied = 0, hogCopied = 0, musicCopied = 0, failed = 0, skipped = 0;
+		for (PackFile f : found) {
+			if (f.destName == null) {
+				skipped++;
+				continue;
+			}
+			File dest = new File(getFilesDir(), f.destName);
+			File temp = new File(getFilesDir(), f.destName + ".tmp");
+			try {
+				if (f.music) {
+					//noinspection ResultOfMethodCallIgnored
+					musicDir().mkdirs();
+				}
+				copyUriToFile(f.uri, temp);
+				if (f.size > 0 && temp.length() != f.size) {
+					throw new IOException("size mismatch");
+				}
+				if (f.music) {
+					// Replace any earlier copy of this track, whatever its extension was.
+					File[] old = musicDir().listFiles();
+					String prefix = f.destName.substring(6, 9);		// "NN."
+					if (old != null) {
+						for (File o : old) {
+							if (o.getName().startsWith(prefix) && !o.getName().endsWith(".tmp")) {
+								//noinspection ResultOfMethodCallIgnored
+								o.delete();
+							}
+						}
+					}
+				}
+				//noinspection ResultOfMethodCallIgnored
+				dest.delete();
+				if (!temp.renameTo(dest)) {
+					throw new IOException("rename failed");
+				}
+				if (f.music) musicCopied++;
+				else if (f.destName.endsWith(".MN2")) mn2Copied++; else hogCopied++;
+			} catch (IOException e) {
+				//noinspection ResultOfMethodCallIgnored
+				temp.delete();
+				failed++;
+			}
+		}
+
+		if (mn2Copied == 0 && hogCopied == 0 && musicCopied == 0 && failed == 0) {
+			return "No mission pack files (.MN2 / .HOG) or music tracks found in that folder.";
+		}
+		StringBuilder sb = new StringBuilder();
+		if (mn2Copied > 0 || hogCopied > 0 || musicCopied == 0) {
+			sb.append("Imported ").append(mn2Copied).append(mn2Copied == 1 ? " mission" : " missions");
+			sb.append(" (").append(hogCopied).append(hogCopied == 1 ? " .HOG file)" : " .HOG files)");
+		}
+		if (musicCopied > 0) {
+			if (sb.length() > 0) sb.append(", ");
+			sb.append("Imported ").append(musicCopied).append(musicCopied == 1 ? " music track" : " music tracks");
+		}
+		if (failed > 0) sb.append(", ").append(failed).append(" failed");
+		if (skipped > 0) sb.append(", ").append(skipped).append(" skipped (bad name)");
+		sb.append(".");
+		if (mn2Copied > 0) {
+			sb.append(" Start a New Game to pick one.");
+		}
+		return sb.toString();
+	}
+
+	private void collectPackFiles(Uri treeUri, String parentDocId, int depth, List<PackFile> out) {
+		if (depth > 2 || out.size() > 200) {
+			return;
+		}
+		Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId);
+		Cursor cursor = getContentResolver().query(childrenUri, new String[]{
+				DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+				DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+				DocumentsContract.Document.COLUMN_MIME_TYPE,
+				DocumentsContract.Document.COLUMN_SIZE}, null, null, null);
+		if (cursor == null) {
+			return;
+		}
+		List<String> subfolders = new ArrayList<String>();
+		try {
+			while (cursor.moveToNext()) {
+				String docId = cursor.getString(0);
+				String name = cursor.getString(1);
+				String mime = cursor.getString(2);
+				long size = cursor.isNull(3) ? -1 : cursor.getLong(3);
+				if (name == null) {
+					continue;
+				}
+				if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+					subfolders.add(docId);
+					continue;
+				}
+				String upper = name.toUpperCase(Locale.US);
+				String musicName = musicDestName(upper);
+				if (musicName != null) {
+					PackFile m = new PackFile();
+					m.uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+					m.size = size;
+					m.destName = musicName;
+					m.music = true;
+					out.add(m);
+					continue;
+				}
+				if (!upper.endsWith(".MN2") && !upper.endsWith(".HOG")) {
+					continue;
+				}
+				if (upper.equals(DATA_FILENAME_HOG)) {
+					continue;		// never replace the base game
+				}
+				PackFile f = new PackFile();
+				f.uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+				f.size = size;
+				// DOS 8.3 rules: the engine builds "<NAME>.MN2" / ".HOG" from an 8-char name
+				String stem = upper.substring(0, upper.length() - 4);
+				f.destName = (stem.length() >= 1 && stem.length() <= 8 && stem.matches("[A-Z0-9_~!#$%&'()@^{}\\-]+"))
+						? upper : null;
+				out.add(f);
+			}
+		} finally {
+			cursor.close();
+		}
+		for (String docId : subfolders) {
+			collectPackFiles(treeUri, docId, depth + 1, out);
+		}
+	}
+
+	@Override
+	protected void onPause() {
+		super.onPause();
+		// descentView (and the native engine) only exist once the game data files are in
+		// place -- onPause can fire earlier than that, e.g. while the SAF folder picker or
+		// the data copy is in progress.
+		if (descentView != null) {
+			descentPause();
+			mediaPlayer.pause();
+			mediaPlayerPosition = mediaPlayer.getCurrentPosition();
+			stopMotion();
+		}
+	}
+
+	@Override
+	protected void onResume() {
+		super.onResume();
+		setImmersive();
+		if (descentView != null) {
+			if (!descentView.getSurfaceWasDestroyed()) {
+				descentView.resumeRenderThread();
+			}
+			mediaPlayer.seekTo(mediaPlayerPosition);
+			mediaPlayer.start();
+			if (getUseGyroscope()) {
+				startMotion();
+			}
+		}
+	}
+
+	@Override
+	public void onSensorChanged(SensorEvent event) {
+		acceleration = event.values;
+	}
+
+	@Override
+	public void onAccuracyChanged(Sensor sensor, int accuracy) {
+
+	}
+
+	@SuppressWarnings("unused")
+	private float[] getRotationRate() {
+		if (haveGyroscope()) {
+			// Work on a copy: flipping the shared array in place made the sign alternate on every
+			// call between sensor events when the device is in the 90-degree landscape orientation.
+			float[] rate = acceleration.clone();
+			if (rate.length >= 2
+					&& getWindowManager().getDefaultDisplay().getRotation() == Surface.ROTATION_90) {
+				rate[0] *= -1;
+				rate[1] *= -1;
+			}
+			return rate.length >= 3 ? rate : new float[]{0, 0, 0};
+		} else {
+			return new float[]{0, 0, 0};
+		}
+	}
+
+	private boolean haveGyroscope() {
+		return gyroscopeSensor != null;
+	}
+
+	private void startMotion() {
+		if (sensorManager == null || gyroscopeSensor == null) return;
+		// According to this, API 11 can specify the delay as an absolute value
+		// Some devices have high refresh rate displays, so a lower delay is needed to improve gyro responsiveness
+		// https://developer.android.com/guide/topics/sensors/sensors_overview
+		if (Build.VERSION.SDK_INT >= 11) {
+			sensorManager.registerListener(this, gyroscopeSensor, refreshPeriodUs);
+		} else {
+			sensorManager.registerListener(this, gyroscopeSensor, SensorManager.SENSOR_DELAY_GAME);
+		}
+	}
+
+	private void stopMotion() {
+		if (sensorManager != null) sensorManager.unregisterListener(this);
+	}
+
+	@SuppressWarnings("unused")
+	private void playMidi(String path, boolean looping) {
+		File file = new File(path);
+		FileDescriptor fd;
+		FileInputStream fos;
+
+		try {
+			fos = new FileInputStream(file);
+			fd = fos.getFD();
+			mediaPlayer.setDataSource(fd);
+			mediaPlayer.prepare();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		mediaPlayer.setLooping(looping);
+		mediaPlayer.start();
+	}
+
+	/** Folder in app storage holding the user's imported Redbook tracks ("NN.ext"). */
+	private File musicDir() {
+		return new File(getFilesDir(), "music");
+	}
+
+	/** Returns the stored file for a Redbook track number, or null if the user hasn't imported it. */
+	private File findRedbookTrack(int tracknum) {
+		File[] files = musicDir().listFiles();
+		if (files == null) {
+			return null;
+		}
+		String prefix = String.format(Locale.US, "%02d.", tracknum);
+		for (File f : files) {
+			String name = f.getName();
+			if (name.startsWith(prefix) && !name.endsWith(".tmp")) {
+				return f;
+			}
+		}
+		return null;
+	}
+
+	@SuppressWarnings("unused")
+	private boolean playRedbookTrack(int tracknum, boolean looping) {
+		File track = findRedbookTrack(tracknum);
+		if (track == null) {
+			return false;
+		}
+		FileInputStream in = null;
+		try {
+			in = new FileInputStream(track);
+			mediaPlayer.setDataSource(in.getFD());
+			mediaPlayer.prepare();
+		} catch (IOException e) {
+			mediaPlayer.reset();
+			return false;
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (IOException ignored) {
+				}
+			}
+		}
+		mediaPlayer.setLooping(looping);
+		mediaPlayer.start();
+		return true;
+	}
+
+	/** Highest imported Redbook track number, or 0 when no tracks have been imported. */
+	@SuppressWarnings("unused")
+	private int getRedbookTrackCount() {
+		File[] files = musicDir().listFiles();
+		int highest = 0;
+		if (files != null) {
+			for (File f : files) {
+				String name = f.getName();
+				if (name.length() > 3 && name.charAt(2) == '.' && Character.isDigit(name.charAt(0))
+						&& Character.isDigit(name.charAt(1)) && !name.endsWith(".tmp")) {
+					highest = Math.max(highest, Integer.parseInt(name.substring(0, 2)));
+				}
+			}
+		}
+		return highest;
+	}
+
+	@SuppressWarnings("unused")
+	private void stopMusic() {
+		mediaPlayer.stop();
+		mediaPlayer.reset();
+	}
+
+	@SuppressWarnings("unused")
+	private void setMusicVolume(float volume) {
+		mediaPlayer.setVolume(volume, volume);
+	}
+
+	@SuppressWarnings("unused")
+	private float dpToPx(float dp) {
+		Resources resources = getResources();
+		DisplayMetrics metrics = resources.getDisplayMetrics();
+		return dp * (((float) metrics.densityDpi / DisplayMetrics.DENSITY_DEFAULT) * buttonSizeBias);
+	}
+
+	@SuppressWarnings("unused")
+	private float pxToDp(float px) {
+		Resources resources = getResources();
+		DisplayMetrics metrics = resources.getDisplayMetrics();
+		return px / (((float) metrics.densityDpi / DisplayMetrics.DENSITY_DEFAULT) * buttonSizeBias);
+	}
+
+	/**
+	 * Enables immersive mode, hiding navigation controls
+	 */
+	private void setImmersive() {
+		if (Build.VERSION.SDK_INT >= 19) {
+			getWindow().getDecorView().setSystemUiVisibility(
+					View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+							| View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+							| View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+							| View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+							| View.SYSTEM_UI_FLAG_FULLSCREEN
+							| View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+		}
+	}
+
+	private static native void descentPause();
+
+	private static native boolean getUseGyroscope();
+
+	static {
+		System.loadLibrary("descent2");
+	}
+
+	/**
+	 * A root activity's default Back handling (Android 12+) minimizes the app, and a gamepad B
+	 * the game didn't consume gets turned into Back. The game handles "back" itself (DescentView
+	 * sends ESC where it makes sense), so Back must never minimize the app.
+	 */
+	@Override
+	public void onBackPressed() {
+		// Intentionally empty.
+	}
+}
