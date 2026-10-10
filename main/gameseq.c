@@ -1782,6 +1782,10 @@ void load_stars()
 	WIN(DEFINE_SCREEN(STARS_BACKGROUND));
 
 	nm_draw_background1(STARS_BACKGROUND);
+	//nm_draw_background1() leaves gr_current_pal as the stars palette, but the menu background
+	//and fonts were remapped to gr_palette and GL textures are built from gr_current_pal; leaving
+	//them different turns the message box background into noise (same fix as the main menu).
+	{ extern ubyte gr_current_pal[256*3]; gr_copy_palette(gr_current_pal, gr_palette, sizeof(gr_current_pal)); }
 
 }
 
@@ -2183,6 +2187,15 @@ void ShowLevelIntro(int level_num)
 
 
 		memcpy(gr_palette,save_pal,sizeof(gr_palette));
+		//the briefing screens remapped the colour fonts to their own palette; put them (and the
+		//palette the GL glyph textures are built from) back in step with the restored palette,
+		//or the "loading" box drawn next comes out garbled
+		{
+			extern ubyte gr_current_pal[256*3];
+			extern void remap_fonts_and_menus(int do_fadetable_hack);
+			remap_fonts_and_menus(0);
+			gr_copy_palette(gr_current_pal, gr_palette, sizeof(gr_current_pal));
+		}
 	}
 }
 

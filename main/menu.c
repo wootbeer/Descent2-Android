@@ -1529,8 +1529,13 @@ void do_options_menu()
 		m[n].type = NM_TYPE_MENU; m[n].text="Video Options"; n++;
 		toggles_item = n;
 		m[n].type = NM_TYPE_MENU; m[n].text="Toggles..."; n++;
-		packs_item = n;
-		m[n].type = NM_TYPE_MENU; m[n].text="Add Mission Packs"; n++;
+		// Mission packs can only be imported from the title screen: the folder picker pauses the app,
+		// and a level in progress can't be rebuilt around that. -2 = no such item (-1 means "Escape").
+		packs_item = -2;
+		if (Function_mode == FMODE_MENU) {
+			packs_item = n;
+			m[n].type = NM_TYPE_MENU; m[n].text="Add Mission Packs"; n++;
+		}
 
 		i = newmenu_do1( NULL, TXT_OPTIONS, n, m, joydef_menuset, i );
 #ifdef ANDROID_NDK

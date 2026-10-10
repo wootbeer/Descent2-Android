@@ -234,7 +234,7 @@ extern void apply_modified_palette(void);
 //Flickering light system
 typedef struct  {
 	short segnum,sidenum;
-	ulong	mask;					// determines flicker pattern
+	unsigned int	mask;		// determines flicker pattern (32 bits: ulong is 64-bit on arm64)
 	fix	timer;				// time until next change
 	fix	delay;				// time between changes
 } flickering_light;

@@ -17,6 +17,7 @@ static char rcsid[] = "$Id: bm.c 2.37 1996/10/16 15:03:28 jeremy Exp $";
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "pstypes.h"
 #include "inferno.h"
@@ -563,10 +564,10 @@ int bm_init()
 }
 
 // For 64-bit compatibility
-void read_polymodels(CFILE *fp) {
+void read_polymodels_range(CFILE *fp, int count, int offset) {
 	int model_data;
 	
-	for (int i = 0; i < N_polygon_models; ++i) {
+	for (int i = offset; i < offset + count; ++i) {
 		cfread(&Polygon_models[i].n_models, sizeof(int), 1, fp);
 		cfread(&Polygon_models[i].model_data_size, sizeof(int), 1, fp);
 		cfread(&model_data, sizeof(int), 1, fp);
@@ -584,8 +585,12 @@ void read_polymodels(CFILE *fp) {
 		cfread(&Polygon_models[i].n_textures, sizeof(ubyte), 1, fp);
 		cfread(&Polygon_models[i].first_texture, sizeof(ushort), 1, fp);
 		cfread(&Polygon_models[i].simpler_model, sizeof(ubyte), 1, fp);
-		Polygon_models[i].model_data = (void*)model_data;
+		Polygon_models[i].model_data = (void*)(intptr_t)model_data;
 	}
+}
+
+void read_polymodels(CFILE *fp) {
+	read_polymodels_range(fp, N_polygon_models, 0);
 }
 
 void bm_read_all(CFILE * fp)
@@ -766,6 +771,9 @@ void bm_read_extra_robots(char *fname,int type)
 	#endif
 
 	fp = cfopen(fname,"rb");
+	if (!fp) {
+		return;
+	}
 
 	if (type == 2) {
 		int sig;
@@ -819,7 +827,7 @@ void bm_read_extra_robots(char *fname,int type)
 	#ifdef MACINTOSH
 		read_polygon_models(fp, t, N_D2_POLYGON_MODELS);
 	#else
-		cfread( &Polygon_models[N_D2_POLYGON_MODELS], sizeof(polymodel), t, fp );
+		read_polymodels_range(fp, t, N_D2_POLYGON_MODELS);	//file layout has a 32-bit pointer; a raw read breaks on 64-bit
 	#endif
 	
 	for (i=N_D2_POLYGON_MODELS; i<N_polygon_models; i++ )
@@ -930,7 +938,7 @@ void load_robot_replacements(char *level_name)
 		#ifdef MACINTOSH
 			read_polygon_models(fp, 1, i);
 		#else
-			cfread( &Polygon_models[i], sizeof(polymodel), 1, fp );
+			read_polymodels_range(fp, 1, i);
 		#endif
 	
 		free(Polygon_models[i].model_data);

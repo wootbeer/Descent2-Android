@@ -104,6 +104,7 @@ typedef struct bkg {
 
 grs_bitmap nm_background,nm_background_save;
 #ifdef OGLES
+#include <GLES/gl.h>
 extern int Surface_recreate_count;
 extern int Menu_draw_copyright;
 #ifdef ANDROID_NDK
@@ -153,6 +154,13 @@ void nm_remap_background()
 		memcpy(nm_background.bm_data,nm_background_save.bm_data,nm_background.bm_w * nm_background.bm_h);
 
 		gr_remap_bitmap_good( &nm_background, background_palette, -1, -1 );
+#ifdef OGLES
+		//the cached GL copy was built from the old remap; make it rebuild
+		if (nm_background.bm_ogles_tex_id) {
+			glDeleteTextures(1, &nm_background.bm_ogles_tex_id);
+			nm_background.bm_ogles_tex_id = 0;
+		}
+#endif
 	}
 }
 
@@ -212,6 +220,9 @@ void nm_draw_background(int x1, int y1, int x2, int y2 )
 		
 		nm_background = nm_background_save;
 		nm_background.bm_data=NULL;
+#ifdef OGLES
+		nm_background.bm_ogles_tex_id = 0;	//don't inherit/free a texture id that isn't ours
+#endif
 		nm_remap_background();
 		
 		Background_hires = MenuHires;
@@ -500,9 +511,9 @@ WIN(DDGRLOCK(dd_grd_curcanv));
 		if (item->value > item->max_value) item->value=item->max_value;
 		sprintf( item->saved_text, "%s\t%s", item->text, SLIDER_LEFT );
 		for (j=0; j<(item->max_value-item->min_value+1); j++ )	{
-			sprintf( item->saved_text, "%s%s", item->saved_text,SLIDER_MIDDLE );
+			strcat( item->saved_text, SLIDER_MIDDLE );
 		}
-		sprintf( item->saved_text, "%s%s", item->saved_text,SLIDER_RIGHT );
+		strcat( item->saved_text, SLIDER_RIGHT );
 		
 		item->saved_text[item->value+1+strlen(item->text)+1] = SLIDER_MARKER[0];
 		
@@ -912,9 +923,9 @@ RePaintNewmenu4:
 			nothers++;
 			sprintf( item[i].saved_text, "%s", SLIDER_LEFT );
 			for (j=0; j<(item[i].max_value-item[i].min_value+1); j++ )	{
-				sprintf( item[i].saved_text, "%s%s", item[i].saved_text,SLIDER_MIDDLE );
+				strcat( item[i].saved_text, SLIDER_MIDDLE );
 			}
-			sprintf( item[i].saved_text, "%s%s", item[i].saved_text,SLIDER_RIGHT );
+			strcat( item[i].saved_text, SLIDER_RIGHT );
 			gr_get_string_size(item[i].saved_text,&w1,&h1,&aw1 );
 			string_width += w1 + aw;
 		}

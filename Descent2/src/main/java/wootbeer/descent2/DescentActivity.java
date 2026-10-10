@@ -38,6 +38,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -641,7 +642,8 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		String rootId = DocumentsContract.getTreeDocumentId(treeUri);
 		collectPackFiles(treeUri, rootId, 0, found);
 
-		int mn2Copied = 0, hogCopied = 0, musicCopied = 0, failed = 0, skipped = 0;
+		int mvlCopied = 0, mn2Copied = 0, hogCopied = 0, musicCopied = 0, failed = 0, skipped = 0, hogNoMission = 0;
+		List<String> copiedHogs = new ArrayList<String>();
 		for (PackFile f : found) {
 			if (f.destName == null) {
 				skipped++;
@@ -677,7 +679,9 @@ public class DescentActivity extends Activity implements SensorEventListener {
 					throw new IOException("rename failed");
 				}
 				if (f.music) musicCopied++;
-				else if (f.destName.endsWith(".MN2")) mn2Copied++; else hogCopied++;
+				else if (f.destName.endsWith(".MN2")) mn2Copied++;
+				else if (f.destName.endsWith(".MVL")) mvlCopied++;
+				else { hogCopied++; copiedHogs.add(f.destName); }
 			} catch (IOException e) {
 				//noinspection ResultOfMethodCallIgnored
 				temp.delete();
@@ -685,7 +689,22 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			}
 		}
 
-		if (mn2Copied == 0 && hogCopied == 0 && musicCopied == 0 && failed == 0) {
+		// A pack only shows up in the New Game list if a NAME.MN2 sits next to NAME.HOG. Some packs
+		// ship just the HOG with the mission file inside it, so pull it out when there is no loose one.
+		for (String hogName : copiedHogs) {
+			String stem = hogName.substring(0, hogName.length() - 4);
+			File mn2 = new File(getFilesDir(), stem + ".MN2");
+			if (mn2.exists()) {
+				continue;
+			}
+			if (extractEmbeddedMn2(new File(getFilesDir(), hogName), mn2)) {
+				mn2Copied++;
+			} else {
+				hogNoMission++;
+			}
+		}
+
+		if (mn2Copied == 0 && hogCopied == 0 && mvlCopied == 0 && musicCopied == 0 && failed == 0) {
 			return "No mission pack files (.MN2 / .HOG) or music tracks found in that folder.";
 		}
 		StringBuilder sb = new StringBuilder();
@@ -697,6 +716,15 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			if (sb.length() > 0) sb.append(", ");
 			sb.append("Imported ").append(musicCopied).append(musicCopied == 1 ? " music track" : " music tracks");
 		}
+		if (mvlCopied > 0) {
+			if (sb.length() > 0) sb.append(", ");
+			sb.append("Imported ").append(mvlCopied).append(mvlCopied == 1 ? " movie file" : " movie files");
+		}
+		if (hogNoMission > 0) {
+			sb.append(", ").append(hogNoMission).append(hogNoMission == 1 ? " .HOG has" : " .HOGs have")
+					.append(" no .MN2 mission file, so ").append(hogNoMission == 1 ? "it" : "they")
+					.append(" won't appear in the mission list (each pack needs NAME.MN2 next to NAME.HOG)");
+		}
 		if (failed > 0) sb.append(", ").append(failed).append(" failed");
 		if (skipped > 0) sb.append(", ").append(skipped).append(" skipped (bad name)");
 		sb.append(".");
@@ -704,6 +732,68 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			sb.append(" Start a New Game to pick one.");
 		}
 		return sb.toString();
+	}
+
+	/**
+	 * Looks inside a HOG archive ("DHF" header, then 13-byte name + 4-byte little-endian size +
+	 * data for each entry) for a .MN2 mission file and writes the first one found to dest. The
+	 * mission loader pairs NAME.MN2 with NAME.HOG by file name, and a .MN2 doesn't contain its
+	 * own name, so it can be saved under the HOG's name whatever it was called inside. Returns
+	 * false if the HOG has no .MN2 (or isn't a valid HOG).
+	 */
+	private boolean extractEmbeddedMn2(File hog, File dest) {
+		RandomAccessFile raf = null;
+		File temp = new File(dest.getPath() + ".tmp");
+		try {
+			raf = new RandomAccessFile(hog, "r");
+			long len = raf.length();
+			byte[] sig = new byte[3];
+			raf.readFully(sig);
+			if (sig[0] != 'D' || sig[1] != 'H' || sig[2] != 'F') {
+				return false;
+			}
+			long pos = 3;
+			byte[] entry = new byte[17];
+			while (pos + 17 <= len) {
+				raf.seek(pos);
+				raf.readFully(entry);
+				int n = 0;
+				while (n < 13 && entry[n] != 0) {
+					n++;
+				}
+				String name = new String(entry, 0, n, "US-ASCII").toUpperCase(Locale.US);
+				long size = (entry[13] & 0xFFL) | ((entry[14] & 0xFFL) << 8)
+						| ((entry[15] & 0xFFL) << 16) | ((entry[16] & 0xFFL) << 24);
+				pos += 17;
+				if (name.endsWith(".MN2") && size > 0 && size < (1 << 20) && pos + size <= len) {
+					byte[] data = new byte[(int) size];
+					raf.seek(pos);
+					raf.readFully(data);
+					OutputStream out = new FileOutputStream(temp);
+					try {
+						out.write(data);
+					} finally {
+						out.close();
+					}
+					//noinspection ResultOfMethodCallIgnored
+					dest.delete();
+					return temp.renameTo(dest);
+				}
+				pos += size;
+			}
+		} catch (IOException e) {
+			// fall through: not usable
+		} finally {
+			if (raf != null) {
+				try {
+					raf.close();
+				} catch (IOException ignored) {
+				}
+			}
+		}
+		//noinspection ResultOfMethodCallIgnored
+		temp.delete();
+		return false;
 	}
 
 	private void collectPackFiles(Uri treeUri, String parentDocId, int depth, List<PackFile> out) {
@@ -744,11 +834,14 @@ public class DescentActivity extends Activity implements SensorEventListener {
 					out.add(m);
 					continue;
 				}
-				if (!upper.endsWith(".MN2") && !upper.endsWith(".HOG")) {
+				if (!upper.endsWith(".MN2") && !upper.endsWith(".HOG") && !upper.endsWith(".MVL")) {
 					continue;
 				}
 				if (upper.equals(DATA_FILENAME_HOG)) {
 					continue;		// never replace the base game
+				}
+				if (upper.endsWith(".MVL") && (upper.startsWith("INTRO-") || upper.startsWith("OTHER-") || upper.startsWith("ROBOTS-"))) {
+					continue;		// the base game's movie libraries
 				}
 				PackFile f = new PackFile();
 				f.uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);

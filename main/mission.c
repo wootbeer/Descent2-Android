@@ -188,7 +188,7 @@ char *mfgets(char *s,int n,CFILE *f)
 	char *r;
 
 	r = cfgets(s,n,f);
-	if (r && s[strlen(s)-1] == '\n')
+	if (r && strlen(s) > 0 && s[strlen(s)-1] == '\n')
 		s[strlen(s)-1] = 0;
 
 	return r;
@@ -292,18 +292,17 @@ int read_mission_file(char *filename,int count,int location)
 		Mission_list[count].anarchy_only_flag = 0;
 		Mission_list[count].location = location;
 
-		p = get_parm_value("name",mfile);
-
-		if (!p) {		//try enhanced mission
-			cfseek(mfile,0,SEEK_SET);
-			p = get_parm_value("xname",mfile);
-		}
-
-		if (HoardEquipped())
+		//The name line is normally the first line, but some packs (e.g. Vertigo) start with
+		//comments/blank lines, so look through the first few lines for name/xname/zname.
 		{
-			if (!p) {		//try super-enhanced mission!
-				cfseek(mfile,0,SEEK_SET);
-				p = get_parm_value("zname",mfile);
+			static char nbuf[80];
+			int tries;
+			p = NULL;
+			cfseek(mfile,0,SEEK_SET);
+			for (tries=0; tries<16 && !p; tries++) {
+				if (!mfgets(nbuf,80,mfile)) break;
+				if ((istok(nbuf,"name") || istok(nbuf,"xname") || istok(nbuf,"zname")) && strchr(nbuf,'='))
+					p = get_value(nbuf);
 			}
 		}
 
@@ -386,7 +385,9 @@ int build_mission_list(int anarchy_mode)
 				continue;		//skip the built-in
 
 			namelen = (size_t)(ext - ent->d_name);
-			if (namelen == 0 || namelen > 8) continue;
+			if (namelen == 0 || namelen > 8) {
+				continue;
+			}
 
 			dup = 0;
 			for (i=0; i<count; i++)
@@ -405,6 +406,7 @@ int build_mission_list(int anarchy_mode)
 		}
 		closedir(dir);
 	}
+
 
 	//move vertigo to top of mission list
 	{
@@ -478,10 +480,6 @@ int load_mission(int mission_num)
 		strcpy(buf+strlen(buf)-4,".HOG");		//change extension
 
 		found_hogfile = cfile_use_alternate_hogfile(buf);
-#ifdef ANDROID_NDK
-		__android_log_print(ANDROID_LOG_INFO, "DescentMission", "Loading mission '%s': hog '%s' has %d entries",
-			Mission_list[mission_num].filename, buf, AltNum_hogfiles);
-#endif
 
 		#ifdef RELEASE				//for release, require mission to be in hogfile
 		if (! found_hogfile) {
@@ -598,10 +596,6 @@ int load_mission(int mission_num)
 		int i, n;
 		for (i = 0; i < Last_level; i++)
 			if (!cfexist(Level_names[i])) {
-#ifdef ANDROID_NDK
-				__android_log_print(ANDROID_LOG_ERROR, "DescentMission",
-					"Level '%s' not found (alternate hog has %d entries)", Level_names[i], AltNum_hogfiles);
-#endif
 				if (AltNum_hogfiles == 0)
 					sprintf(Mission_load_error, "%s.HOG is missing or not a valid HOG file\n(level %s not found)",
 						Mission_list[mission_num].filename, Level_names[i]);
@@ -614,10 +608,6 @@ int load_mission(int mission_num)
 		n = -Last_secret_level;
 		for (i = 0; i < n; i++)
 			if (!cfexist(Secret_level_names[i])) {
-#ifdef ANDROID_NDK
-				__android_log_print(ANDROID_LOG_ERROR, "DescentMission",
-					"Secret level '%s' not found (alternate hog has %d entries)", Secret_level_names[i], AltNum_hogfiles);
-#endif
 				sprintf(Mission_load_error, "Secret level %s not found in %s.HOG",
 					Secret_level_names[i], Mission_list[mission_num].filename);
 				Current_mission_num = -1;

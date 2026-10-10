@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2 (10-9-2026)]
+
+### Added
+ - Can now bind M1/M2, extra buttons  
+
+### Changed
+ - Add Mission Packs only in main menu  
+
+### Fixed
+ - FPS counter is off by default  
+ - Custom mission loading  
+ - Garbled text in message boxes  
+ - Option menu sliders  
+ - Stuck pixels during level exit cutscene  
+ - Other random crashes  
+
 ## [0.1 (10-7-2026)]
 
 ### Added

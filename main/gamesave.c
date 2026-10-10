@@ -1707,13 +1707,12 @@ int load_level(char * filename_passed)
 	Assert(sig == 'PLVL');
 
 	if (version >= 8) {			//read dummy data
-		if (HoardEquipped())
-		{
-			read_int(LoadFile);
-			read_short(LoadFile);
-			read_byte(LoadFile);
-		}
-		else Error("This level requires the Vertigo Enhanced version of D2.");
+		//Vertigo levels carry 7 bytes of Hoard data.  The original refused to load them unless
+		//hoard.ham existed, but that file isn't part of the Vertigo pack people import here, and
+		//skipping the bytes is all that's needed to read the level.
+		read_int(LoadFile);
+		read_short(LoadFile);
+		read_byte(LoadFile);
 
 	}
 
@@ -1749,7 +1748,21 @@ int load_level(char * filename_passed)
 				Flickering_lights[i].delay		= read_fix(LoadFile);
 			}
 		#else
-			cfread(Flickering_lights,sizeof(*Flickering_lights),Num_flickering_lights,LoadFile);
+			if (Num_flickering_lights < 0 || Num_flickering_lights >= MAX_FLICKERING_LIGHTS) {
+				Num_flickering_lights = 0;
+			}
+			else {
+				//read field by field: the in-memory struct isn't the same size as the file's
+				//16-byte records on a 64-bit build
+				for (i = 0; i < Num_flickering_lights; i++)
+				{
+					Flickering_lights[i].segnum 	= read_short(LoadFile);
+					Flickering_lights[i].sidenum 	= read_short(LoadFile);
+					Flickering_lights[i].mask		= read_int(LoadFile);
+					Flickering_lights[i].timer		= read_fix(LoadFile);
+					Flickering_lights[i].delay		= read_fix(LoadFile);
+				}
+			}
 		#endif
 	}
 	else

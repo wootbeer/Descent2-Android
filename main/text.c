@@ -140,7 +140,9 @@ void load_text()
 				Error("Unsupported key sequence <\\%c> on line %d of file <%s>",p[1],i+1,filename);
 			
 			p[0] = newchar;
-			sprintf(p+1, "%s", p+2);
+			// Source and destination overlap, so this has to be memmove (the old sprintf() of the
+			// string onto itself is undefined behaviour and garbled text in optimized builds).
+			memmove(p+1, p+2, strlen(p+2)+1);
 			p++;
 		}
  

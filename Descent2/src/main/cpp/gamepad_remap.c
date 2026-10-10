@@ -30,6 +30,7 @@
 
 #include <jni.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "types.h"
 #include "error.h"
@@ -211,6 +212,21 @@ JNIEXPORT void JNICALL Java_wootbeer_descent2_DescentView_gamepadButtonRaw(JNIEn
 	}
 }
 
+// True if keyCode is bound to any action, or the Remap Gamepad screen is open (so it can
+// capture any button the device sends -- e.g. a handheld's programmable M1/M2 buttons).
+JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_gamepadKeyBound(JNIEnv *env, jclass type, jint keyCode) {
+	int i;
+	if (Gamepad_remap_screen_active || Gamepad_remap_capturing) {
+		return JNI_TRUE;
+	}
+	for (i = 0; i < GP_NUM_ACTIONS; i++) {
+		if (Gamepad_bound_keycodes[i] == keyCode) {
+			return JNI_TRUE;
+		}
+	}
+	return JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_isInRemapGamepadScreen(JNIEnv *env, jclass type) {
 	return (jboolean) Gamepad_remap_screen_active;
 }
@@ -254,7 +270,23 @@ static const char *gamepad_remap_bound_name(int keyCode) {
 		case GP_BUTTON_THUMBL: return "L3";
 		case GP_TRIGGER_LT:    return "LT";
 		case GP_TRIGGER_RT:    return "RT";
-		default:               return "---";
+		case 98:               return "C";
+		case 101:              return "Z";
+		case 104:              return "L2";
+		case 105:              return "R2";
+		case 107:              return "R3";
+		case 110:              return "Mode";
+		case GP_UNBOUND:       return "---";
+		default: {
+			// Any other button the device sends (e.g. a handheld's M1/M2 back buttons):
+			// name it by its Android key code so it can be told apart.
+			static char name[16];
+			if (keyCode >= 188 && keyCode <= 203)
+				snprintf(name, sizeof(name), "Btn %d", keyCode - 187);
+			else
+				snprintf(name, sizeof(name), "Key %d", keyCode);
+			return name;
+		}
 	}
 }
 

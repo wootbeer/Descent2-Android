@@ -50,6 +50,10 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	private InputMethodManager imm;
 	private final Object renderThreadObj = new Object();
 	private final Set<Integer> connectedGamepadIds = new HashSet<>();
+	// Gamepad key codes this view has seen go down (and handled) but not yet up. A matching
+	// release is always delivered even if the system tags that key-up with a different input
+	// source than the key-down (some handheld "virtual controller" devices do).
+	private final Set<Integer> gamepadKeysHeld = new HashSet<>();
 	// How many times the physical display resolution the game is actually rendered at. The
 	// SurfaceHolder's buffer is fixed to this larger size and the system compositor downscales
 	// it to fit the screen, which acts as supersampling -- smoother edges, less texture shimmer.
@@ -381,7 +385,17 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	private boolean handleGamepadKey(int keyCode, boolean down, KeyEvent event) {
 		int source = event.getSource();
 		boolean fromGamepad = (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-				|| (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+				|| (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+				|| (!down && gamepadKeysHeld.contains(keyCode));
+		// Extra buttons (handheld back buttons such as M1/M2, C/Z, L2/R2 as keys, R3, Mode,
+		// BUTTON_1..16) are sometimes reported by a separate input device that doesn't
+		// advertise gamepad sources -- still let them through, as long as they are in the
+		// gamepad button key-code ranges (which a keyboard never produces).
+		if (!fromGamepad && !isSpecificGamepadKey(keyCode)
+				&& ((keyCode >= KeyEvent.KEYCODE_BUTTON_A && keyCode <= KeyEvent.KEYCODE_BUTTON_MODE)
+				|| (keyCode >= KeyEvent.KEYCODE_BUTTON_1 && keyCode <= KeyEvent.KEYCODE_BUTTON_16))) {
+			fromGamepad = true;
+		}
 		if (!fromGamepad) {
 			return false;
 		}
@@ -444,10 +458,69 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 				key = dpadScancode(keyCode);
 				break;
 			default:
+				// Any other gamepad button -- e.g. a handheld's programmable M1/M2 back buttons
+				// -- is usable if the player bound it in Remap Gamepad (or the remap screen is
+				// open and wants to capture it). System keys are never taken.
+				if (isSystemKey(keyCode)) {
+					return false;
+				}
+				if (gamepadKeyBound(keyCode) || (!down && gamepadKeysHeld.contains(keyCode))) {
+					gamepadButtonRaw(keyCode, down);
+					return true;
+				}
 				return false;
 		}
 		keyHandler(key, down);
 		return true;
+	}
+
+	// Buttons handleGamepadKey() has its own dedicated handling for.
+	private static boolean isSpecificGamepadKey(int keyCode) {
+		switch (keyCode) {
+			case KeyEvent.KEYCODE_BUTTON_A:
+			case KeyEvent.KEYCODE_BUTTON_B:
+			case KeyEvent.KEYCODE_BUTTON_X:
+			case KeyEvent.KEYCODE_BUTTON_Y:
+			case KeyEvent.KEYCODE_BUTTON_L1:
+			case KeyEvent.KEYCODE_BUTTON_R1:
+			case KeyEvent.KEYCODE_BUTTON_THUMBL:
+			case KeyEvent.KEYCODE_BUTTON_START:
+			case KeyEvent.KEYCODE_BUTTON_SELECT:
+			case KeyEvent.KEYCODE_DPAD_UP:
+			case KeyEvent.KEYCODE_DPAD_DOWN:
+			case KeyEvent.KEYCODE_DPAD_LEFT:
+			case KeyEvent.KEYCODE_DPAD_RIGHT:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	// Keys that belong to the system or to basic navigation and must never be remappable.
+	private static boolean isSystemKey(int keyCode) {
+		switch (keyCode) {
+			case KeyEvent.KEYCODE_BACK:
+			case KeyEvent.KEYCODE_HOME:
+			case KeyEvent.KEYCODE_MENU:
+			case KeyEvent.KEYCODE_APP_SWITCH:
+			case KeyEvent.KEYCODE_POWER:
+			case KeyEvent.KEYCODE_SLEEP:
+			case KeyEvent.KEYCODE_WAKEUP:
+			case KeyEvent.KEYCODE_CAMERA:
+			case KeyEvent.KEYCODE_SEARCH:
+			case KeyEvent.KEYCODE_CALL:
+			case KeyEvent.KEYCODE_ENDCALL:
+			case KeyEvent.KEYCODE_VOLUME_UP:
+			case KeyEvent.KEYCODE_VOLUME_DOWN:
+			case KeyEvent.KEYCODE_VOLUME_MUTE:
+			case KeyEvent.KEYCODE_DPAD_CENTER:
+			case KeyEvent.KEYCODE_ENTER:
+			case KeyEvent.KEYCODE_ESCAPE:
+			case KeyEvent.KEYCODE_DEL:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	@Override
@@ -533,7 +606,9 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			}
 			return true;
 		}
-		if (handleGamepadKey(keyCode, false, event)) {
+		boolean gamepadHandled = handleGamepadKey(keyCode, false, event);
+		gamepadKeysHeld.remove(keyCode);
+		if (gamepadHandled) {
 			return true;
 		}
 		if (keyCode == KeyEvent.KEYCODE_DEL) {
@@ -557,6 +632,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			return true;
 		}
 		if (handleGamepadKey(keyCode, true, event)) {
+			gamepadKeysHeld.add(keyCode);
 			return true;
 		}
 		if (keyCode == KeyEvent.KEYCODE_DEL) {
@@ -859,6 +935,8 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	private static native void setGamepadConnected(boolean connected);
 
 	private static native void gamepadButtonRaw(int keyCode, boolean down);
+
+	private static native boolean gamepadKeyBound(int keyCode);
 
 	private static native void descentMain(int w, int h, Context activity,
 										   DescentView descentView,

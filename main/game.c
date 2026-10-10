@@ -217,7 +217,7 @@ int Cockpit_mode=CM_FULL_COCKPIT;		//set game.h for values
 int Cockpit_mode_save=-1;					//set while in letterbox or rear view, or -1
 int force_cockpit_redraw=0;
 
-int framerate_on=1;
+int framerate_on=0;
 
 int PaletteRedAdd, PaletteGreenAdd, PaletteBlueAdd;
 
@@ -2548,7 +2548,16 @@ void flicker_lights()
 	f = Flickering_lights;
 	
 	for (l=0;l<Num_flickering_lights;l++,f++) {
-		segment *segp = &Segments[f->segnum];
+		segment *segp;
+		
+		//a corrupt or mismatched level can hold bad indices; don't crash on them
+		if (f->segnum < 0 || f->segnum > Highest_segment_index || f->sidenum < 0 || f->sidenum > 5) {
+			continue;
+		}
+		segp = &Segments[f->segnum];
+		if (segp->sides[f->sidenum].tmap_num < 0 || segp->sides[f->sidenum].tmap_num >= MAX_TEXTURES ||
+			(segp->sides[f->sidenum].tmap_num2 & 0x3fff) >= MAX_TEXTURES)
+			continue;
 		
 		//make sure this is actually a light
 		if (! (WALL_IS_DOORWAY(segp, f->sidenum) & WID_RENDER_FLAG))
@@ -2558,6 +2567,9 @@ void flicker_lights()
 		
 		if (f->timer == 0x80000000)		//disabled
 			continue;
+		if (f->delay <= 0) {		//a zero/negative delay would spin forever in the loop below
+			continue;
+		}
 		
 		if ((f->timer -= FrameTime) < 0) {
 			

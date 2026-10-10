@@ -207,6 +207,19 @@ void MovieShowFrame (ubyte *buf,uint bufw,uint bufh,uint sx,uint sy,uint w,uint 
 
 	//mprintf((0,"MovieShowFrame %d,%d  %d,%d  %d,%d  %d,%d\n",bufw,bufh,sx,sy,w,h,dstx,dsty));
 
+	{
+		//The movie's draw rectangle can change between its first frame and the rest (e.g. 1920x702
+		//at y=-1, then 1920x1011 at y=34); the first frame's pixels would otherwise stay on screen
+		//outside the new rectangle, as a strip of stuck pixels.  Clear the screen when it changes.
+		static uint last[8] = {0};
+		if (last[0] != bufw || last[1] != bufh || last[2] != sx || last[3] != sy || last[4] != w || last[5] != h || last[6] != dstx || last[7] != dsty) {
+			last[0] = bufw; last[1] = bufh; last[2] = sx; last[3] = sy; last[4] = w; last[5] = h; last[6] = dstx; last[7] = dsty;
+#ifdef OGLES
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#endif
+		}
+	}
+
 	source_bm.bm_x = source_bm.bm_y = 0;
 	source_bm.bm_w = source_bm.bm_rowsize = bufw;
 	source_bm.bm_h = bufh;
@@ -1087,6 +1100,15 @@ try_again:;
 					Error("Cannot open movie file <%s>",filename);
 				#endif
 			}
+#ifdef ANDROID_NDK
+			//mission packs often ship only the low-res robot library: fall back to it
+			if (is_robots == 1 && high_res) {
+				strchr(filename,'.')[-1] = 'l';
+				high_res = 0;
+				is_robots = 2;
+				goto try_again;
+			}
+#endif
 			#if defined(D2_OEM)		//if couldn't get higres, try low
 			if (is_robots == 1) {	//first try, try again with lowres
 				strchr(filename,'.')[-1] = 'l';
