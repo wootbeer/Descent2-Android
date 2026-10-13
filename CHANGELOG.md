@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3 (10-13-2026)]
+
+### Added
+ - Typing paths for devices without a system file picker (Android TV)
+
 ## [0.2 (10-9-2026)]
 
 ### Added

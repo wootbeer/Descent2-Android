@@ -1,6 +1,13 @@
 package wootbeer.descent2;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.DialogInterface;
+import android.os.Environment;
+import android.provider.Settings;
+import android.text.InputType;
+import android.widget.EditText;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
@@ -368,13 +375,165 @@ public class DescentActivity extends Activity implements SensorEventListener {
 	}
 
 	private void openFolderPicker() {
+
 		if (Build.VERSION.SDK_INT < 21) {
 			showDataPicker("This Android version can't select external files. Please update the app's " +
 					"bundled assets instead.");
 			return;
 		}
-		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-		startActivityForResult(intent, REQUEST_CODE_OPEN_DATA_FOLDER);
+		try {
+			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+			startActivityForResult(intent, REQUEST_CODE_OPEN_DATA_FOLDER);
+		} catch (ActivityNotFoundException e) {
+			// No system folder picker (e.g. Android TV): let the user type the folder instead.
+			showTypedFolderDialog(true);
+		}
+	}
+
+	// --- Fallback for devices without a system folder picker (Android TV) -------------------
+
+	/**
+	 * Asks for a folder path to import from. firstRun: import the base game data (otherwise
+	 * add-on mission packs). Needs "All files access" for most locations; the app's own
+	 * external folder (where adb push can put files) needs no permission.
+	 */
+	private void showTypedFolderDialog(final boolean firstRun) {
+		final File appDir = getExternalFilesDir(null);
+		final EditText input = new EditText(this);
+		input.setSingleLine(true);
+		input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+		input.setText(Environment.getExternalStorageDirectory().getPath());
+		input.setSelection(input.getText().length());
+
+		String msg = "This device has no system folder picker. Type the path of the folder that contains "
+				+ (firstRun ? "your Descent II data files" : "the mission packs (.MN2 / .HOG)")
+				+ ".\n\nReading most folders needs \"All files access\" (use the button below). "
+				+ "Alternatively, copy the files to the app's own folder with adb and import from there:\n"
+				+ (appDir != null ? appDir.getPath() : "(unavailable)");
+
+		AlertDialog.Builder b = new AlertDialog.Builder(this);
+		b.setTitle("Enter folder path");
+		b.setMessage(msg);
+		b.setView(input);
+		b.setCancelable(false);
+		b.setPositiveButton("Import", null);
+		b.setNeutralButton("All files access", null);
+		b.setNegativeButton("Cancel", null);
+		final AlertDialog dialog = b.create();
+		dialog.show();
+		// Set the listeners after show() so the dialog stays open when the import can't proceed.
+		dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View v) {
+				File dir = new File(input.getText().toString().trim());
+				File[] listing = dir.listFiles();
+				if (!dir.isDirectory() || listing == null) {
+					Toast.makeText(DescentActivity.this, dir.isDirectory()
+							? "Can't read that folder. Grant \"All files access\" first."
+							: "That folder doesn't exist.", Toast.LENGTH_LONG).show();
+					return;
+				}
+				dialog.dismiss();
+				if (firstRun) {
+					copyDataFilesFromDir(dir);
+				} else {
+					importMissionPacksFromDir(dir);
+				}
+			}
+		});
+		dialog.getButton(DialogInterface.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View v) {
+				requestAllFilesAccess();
+			}
+		});
+		dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View v) {
+				dialog.dismiss();
+			}
+		});
+	}
+
+	private void requestAllFilesAccess() {
+		if (Build.VERSION.SDK_INT >= 30) {
+			if (Environment.isExternalStorageManager()) {
+				Toast.makeText(this, "All files access is already granted.", Toast.LENGTH_SHORT).show();
+				return;
+			}
+			try {
+				startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+						Uri.parse("package:" + getPackageName())));
+				return;
+			} catch (RuntimeException e) {
+				// fall through to the general list
+			}
+			try {
+				startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+				return;
+			} catch (RuntimeException e) {
+				// fall through
+			}
+			Toast.makeText(this, "Can't open the settings screen. Grant access with: adb shell appops set --uid "
+					+ getPackageName() + " MANAGE_EXTERNAL_STORAGE allow", Toast.LENGTH_LONG).show();
+		} else if (Build.VERSION.SDK_INT >= 23) {
+			requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"}, 4244);
+		}
+	}
+
+	private void copyDataFilesFromDir(final File dir) {
+		showCopyingProgress();
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				final String error = doCopyDataFiles(null, dir);
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						if (error != null) {
+							showDataPicker(error);
+						} else {
+							launchGame();
+						}
+					}
+				});
+			}
+		}).start();
+	}
+
+	private void importMissionPacksFromDir(final File dir) {
+		Toast.makeText(this, "Importing mission packs...", Toast.LENGTH_SHORT).show();
+		new Thread(new Runnable() {
+			@Override
+			public void run() {
+				String result;
+				try {
+					result = importMissionPacks(null, dir);
+				} catch (RuntimeException e) {
+					result = "Couldn't import mission packs: " + e.getMessage();
+				}
+				final String message = result;
+				runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						Toast.makeText(DescentActivity.this, message, Toast.LENGTH_LONG).show();
+					}
+				});
+			}
+		}).start();
+	}
+
+	/** Finds a file in a typed-path folder, ignoring case. */
+	private static File findChildFile(File dir, String name) {
+		File[] files = dir.listFiles();
+		if (files != null) {
+			for (File f : files) {
+				if (f.isFile() && f.getName().equalsIgnoreCase(name)) {
+					return f;
+				}
+			}
+		}
+		return null;
 	}
 
 	@Override
@@ -399,7 +558,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		new Thread(new Runnable() {
 			@Override
 			public void run() {
-				final String error = doCopyDataFiles(treeUri);
+				final String error = doCopyDataFiles(treeUri, null);
 				runOnUiThread(new Runnable() {
 					@Override
 					public void run() {
@@ -434,7 +593,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 	/**
 	 * Runs on a background thread. Returns null on success, or a user-facing error message.
 	 */
-	private String doCopyDataFiles(Uri treeUri) {
+	private String doCopyDataFiles(Uri treeUri, File dir) {
 		List<String> destNames = new ArrayList<String>();
 		List<Uri> sources = new ArrayList<Uri>();
 		StringBuilder missing = new StringBuilder();
@@ -443,7 +602,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			boolean any = false;
 			// Copy every alternative that is present (e.g. both .S22 and .S11 if both exist).
 			for (String name : names) {
-				Uri uri = findChildDocument(treeUri, name);
+				Uri uri = findSource(treeUri, dir, name);
 				if (uri != null) {
 					destNames.add(name);
 					sources.add(uri);
@@ -460,7 +619,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			return "Couldn't find " + missing + " in that folder. Please pick the folder that contains your Descent II data files.";
 		}
 		for (String name : OPTIONAL_DATA_FILES) {
-			Uri uri = findChildDocument(treeUri, name);
+			Uri uri = findSource(treeUri, dir, name);
 			if (uri != null) {
 				destNames.add(name);
 				sources.add(uri);
@@ -485,7 +644,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			// Best effort: bring along any add-on mission packs sitting in the same folder.
 			// A problem here must never block the base game from starting.
 			try {
-				importMissionPacks(treeUri);
+				importMissionPacks(treeUri, dir);
 			} catch (RuntimeException ignored) {
 			}
 			return null;
@@ -496,6 +655,14 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			}
 			return "Couldn't copy the data files: " + e.getMessage();
 		}
+	}
+
+	private Uri findSource(Uri treeUri, File dir, String name) {
+		if (treeUri == null) {
+			File f = findChildFile(dir, name);
+			return f == null ? null : Uri.fromFile(f);
+		}
+		return findChildDocument(treeUri, name);
 	}
 
 	private Uri findChildDocument(Uri treeUri, String displayName) {
@@ -573,6 +740,8 @@ public class DescentActivity extends Activity implements SensorEventListener {
 				try {
 					Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
 					startActivityForResult(intent, REQUEST_CODE_ADD_MISSION_PACKS);
+				} catch (ActivityNotFoundException e) {
+					showTypedFolderDialog(false);
 				} catch (RuntimeException e) {
 					Toast.makeText(DescentActivity.this,
 							"Couldn't open the folder picker.", Toast.LENGTH_LONG).show();
@@ -588,7 +757,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			public void run() {
 				String result;
 				try {
-					result = importMissionPacks(treeUri);
+					result = importMissionPacks(treeUri, null);
 				} catch (RuntimeException e) {
 					result = "Couldn't import mission packs: " + e.getMessage();
 				}
@@ -637,10 +806,13 @@ public class DescentActivity extends Activity implements SensorEventListener {
 	 * app storage under upper-case names. DESCENT2.HOG is never touched. Returns a short
 	 * user-facing summary.
 	 */
-	private String importMissionPacks(Uri treeUri) {
+	private String importMissionPacks(Uri treeUri, File dir) {
 		List<PackFile> found = new ArrayList<PackFile>();
-		String rootId = DocumentsContract.getTreeDocumentId(treeUri);
-		collectPackFiles(treeUri, rootId, 0, found);
+		if (treeUri == null) {
+			collectPackFilesFromDir(dir, 0, found);
+		} else {
+			collectPackFiles(treeUri, DocumentsContract.getTreeDocumentId(treeUri), 0, found);
+		}
 
 		int mvlCopied = 0, mn2Copied = 0, hogCopied = 0, musicCopied = 0, failed = 0, skipped = 0, hogNoMission = 0;
 		List<String> copiedHogs = new ArrayList<String>();
@@ -796,6 +968,52 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		return false;
 	}
 
+	/** Classifies a found file and adds it to the import list if it is a pack / movie / music file. */
+	private void addPackFile(Uri uri, String name, long size, List<PackFile> out) {
+		String upper = name.toUpperCase(Locale.US);
+		String musicName = musicDestName(upper);
+		if (musicName != null) {
+			PackFile m = new PackFile();
+			m.uri = uri;
+			m.size = size;
+			m.destName = musicName;
+			m.music = true;
+			out.add(m);
+			return;
+		}
+		if (!upper.endsWith(".MN2") && !upper.endsWith(".HOG") && !upper.endsWith(".MVL")) {
+			return;
+		}
+		if (upper.equals(DATA_FILENAME_HOG)) {
+			return;		// never replace the base game
+		}
+		if (upper.endsWith(".MVL") && (upper.startsWith("INTRO-") || upper.startsWith("OTHER-") || upper.startsWith("ROBOTS-"))) {
+			return;		// the base game's movie libraries
+		}
+		PackFile f = new PackFile();
+		f.uri = uri;
+		f.size = size;
+		// DOS 8.3 rules: the engine builds "<NAME>.MN2" / ".HOG" from an 8-char name
+		String stem = upper.substring(0, upper.length() - 4);
+		f.destName = (stem.length() >= 1 && stem.length() <= 8 && stem.matches("[A-Z0-9_~!#$%&'()@^{}\\-]+"))
+				? upper : null;
+		out.add(f);
+	}
+
+	private void collectPackFilesFromDir(File dir, int depth, List<PackFile> out) {
+		File[] files = dir.listFiles();
+		if (depth > 2 || out.size() > 200 || files == null) {
+			return;
+		}
+		for (File f : files) {
+			if (f.isDirectory()) {
+				collectPackFilesFromDir(f, depth + 1, out);
+			} else {
+				addPackFile(Uri.fromFile(f), f.getName(), f.length(), out);
+			}
+		}
+	}
+
 	private void collectPackFiles(Uri treeUri, String parentDocId, int depth, List<PackFile> out) {
 		if (depth > 2 || out.size() > 200) {
 			return;
@@ -823,34 +1041,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 					subfolders.add(docId);
 					continue;
 				}
-				String upper = name.toUpperCase(Locale.US);
-				String musicName = musicDestName(upper);
-				if (musicName != null) {
-					PackFile m = new PackFile();
-					m.uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
-					m.size = size;
-					m.destName = musicName;
-					m.music = true;
-					out.add(m);
-					continue;
-				}
-				if (!upper.endsWith(".MN2") && !upper.endsWith(".HOG") && !upper.endsWith(".MVL")) {
-					continue;
-				}
-				if (upper.equals(DATA_FILENAME_HOG)) {
-					continue;		// never replace the base game
-				}
-				if (upper.endsWith(".MVL") && (upper.startsWith("INTRO-") || upper.startsWith("OTHER-") || upper.startsWith("ROBOTS-"))) {
-					continue;		// the base game's movie libraries
-				}
-				PackFile f = new PackFile();
-				f.uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
-				f.size = size;
-				// DOS 8.3 rules: the engine builds "<NAME>.MN2" / ".HOG" from an 8-char name
-				String stem = upper.substring(0, upper.length() - 4);
-				f.destName = (stem.length() >= 1 && stem.length() <= 8 && stem.matches("[A-Z0-9_~!#$%&'()@^{}\\-]+"))
-						? upper : null;
-				out.add(f);
+				addPackFile(DocumentsContract.buildDocumentUriUsingTree(treeUri, docId), name, size, out);
 			}
 		} finally {
 			cursor.close();
