@@ -252,6 +252,10 @@ extern unsigned int key_up_count(int scancode);
 #define KEY_HOME        0xC7
 #define KEY_PAGEUP      0xC9
 #define KEY_DELETE      0xD3
+
+// Android: internal scancodes (never produced by a real keyboard) used by the gamepad
+// remap system for "select this exact weapon" actions. n = 0..9 primary, 10..19 secondary.
+#define KEY_GP_WEAPON_SC(n) ((n) < 16 ? (0x80 + (n)) : (0xA0 + ((n) - 16)))
 #define KEY_END         0xCF
 #define KEY_PAGEDOWN    0xD1
 #define KEY_UP          0xC8

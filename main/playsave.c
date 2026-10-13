@@ -67,11 +67,12 @@ static char rcsid[] = "$Id: playsave.c 2.50 1997/01/24 18:00:07 jeremy Exp $";
 // Android additions: gamepad remap table, stick layout, Invert Y and touch-control scale.
 // Persisted in the .plr right after the kconfig block (player file version 25+); older
 // pilot files keep the defaults seeded by new_player_config()/read_player_file().
-// 7 + 7 + 2 = GP_NUM_ACTIONS in gamepad_remap.c -- keep in sync by hand.
+// 7 + 7 + 2 + 8 + 24 = GP_NUM_ACTIONS in gamepad_remap.c -- keep in sync by hand.
 #define GAMEPAD_REMAP_NUM_ACTIONS 7
 #define GAMEPAD_REMAP_NUM_NEW_ACTIONS 7
 #define GAMEPAD_REMAP_NUM_NEWER_ACTIONS 2
 #define GAMEPAD_REMAP_NUM_NEWEST_ACTIONS 8
+#define GAMEPAD_REMAP_NUM_WEAPON_ACTIONS 24
 extern int Gamepad_bound_keycodes[];
 extern void gamepad_remap_reset_to_defaults(void);
 extern int Gamepad_stick_layout;
@@ -92,7 +93,7 @@ int n_highest_levels;
 
 hli highest_levels[MAX_MISSIONS];
 
-#define PLAYER_FILE_VERSION	27			//increment this every time the player file changes
+#define PLAYER_FILE_VERSION	28			//increment this every time the player file changes
 
 //version 5  ->  6: added new highest level information
 //version 6  ->  7: stripped out the old saved_game array.
@@ -502,6 +503,7 @@ int read_player_file()
 			short kc7b[GAMEPAD_REMAP_NUM_NEW_ACTIONS];
 			short kc2[GAMEPAD_REMAP_NUM_NEWER_ACTIONS];
 			short kc8[GAMEPAD_REMAP_NUM_NEWEST_ACTIONS];
+			short kc9[GAMEPAD_REMAP_NUM_WEAPON_ACTIONS];
 			ubyte b;
 			int gi;
 	
@@ -532,6 +534,10 @@ int read_player_file()
 						if (player_file_version >= 27 && fread(kc8, sizeof(short), GAMEPAD_REMAP_NUM_NEWEST_ACTIONS, file) == GAMEPAD_REMAP_NUM_NEWEST_ACTIONS) {
 							for (gi = 0; gi < GAMEPAD_REMAP_NUM_NEWEST_ACTIONS; gi++)
 								Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + GAMEPAD_REMAP_NUM_NEWER_ACTIONS + gi] = kc8[gi];
+						}
+						if (player_file_version >= 28 && fread(kc9, sizeof(short), GAMEPAD_REMAP_NUM_WEAPON_ACTIONS, file) == GAMEPAD_REMAP_NUM_WEAPON_ACTIONS) {
+							for (gi = 0; gi < GAMEPAD_REMAP_NUM_WEAPON_ACTIONS; gi++)
+								Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + GAMEPAD_REMAP_NUM_NEWER_ACTIONS + GAMEPAD_REMAP_NUM_NEWEST_ACTIONS + gi] = kc9[gi];
 						}
 					}
 				}
@@ -771,6 +777,7 @@ int write_player_file()
 			short kc7b[GAMEPAD_REMAP_NUM_NEW_ACTIONS];
 			short kc2[GAMEPAD_REMAP_NUM_NEWER_ACTIONS];
 			short kc8[GAMEPAD_REMAP_NUM_NEWEST_ACTIONS];
+			short kc9[GAMEPAD_REMAP_NUM_WEAPON_ACTIONS];
 			ubyte stick_layout = (ubyte) Gamepad_stick_layout;
 			ubyte invert_y = (ubyte) Config_invert_y;
 			ubyte touch_scale = Config_touch_control_scale;
@@ -787,6 +794,9 @@ int write_player_file()
 			for (gi = 0; gi < GAMEPAD_REMAP_NUM_NEWEST_ACTIONS; gi++)
 				kc8[gi] = (short) Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + GAMEPAD_REMAP_NUM_NEWER_ACTIONS + gi];
 
+			for (gi = 0; gi < GAMEPAD_REMAP_NUM_WEAPON_ACTIONS; gi++)
+				kc9[gi] = (short) Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + GAMEPAD_REMAP_NUM_NEWER_ACTIONS + GAMEPAD_REMAP_NUM_NEWEST_ACTIONS + gi];
+
 			if (fwrite(kc7, sizeof(short), GAMEPAD_REMAP_NUM_ACTIONS, file) != GAMEPAD_REMAP_NUM_ACTIONS)
 				errno_ret=errno;
 			else if (fwrite(&stick_layout, sizeof(ubyte), 1, file) != 1)
@@ -802,6 +812,8 @@ int write_player_file()
 			else if (fwrite(&touch_opacity, sizeof(ubyte), 1, file) != 1)
 				errno_ret=errno;
 			else if (fwrite(kc8, sizeof(short), GAMEPAD_REMAP_NUM_NEWEST_ACTIONS, file) != GAMEPAD_REMAP_NUM_NEWEST_ACTIONS)
+				errno_ret=errno;
+			else if (fwrite(kc9, sizeof(short), GAMEPAD_REMAP_NUM_WEAPON_ACTIONS, file) != GAMEPAD_REMAP_NUM_WEAPON_ACTIONS)
 				errno_ret=errno;
 		}
 

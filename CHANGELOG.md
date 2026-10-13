@@ -1,19 +1,24 @@
 # Changelog
 
+## [0.5 (10-13-2026)]
+
+### Added
+ - Weapon-cycling binds
+ - Individual weapon binds
+
 ## [0.4 (10-13-2026)]
 
 ### Added
- - Ship bobbing toggle (Options > Toggles)
- - Gamepad X deletes the highlighted pilot in the pilot list (or press and hold a pilot)
- - Gamepad X on the New Game mission list removes the highlighted imported mission pack
- - Analog stick look option (Options): stick turns/pitches in proportion to how far it is pushed and follows the sensitivity slider; pitch and turn speeds now match
+ - Ship bob toggle
+ - Delete pilot feature
+ - Delete custom mission feature
+ - Analog option for left stick so sensitivity works
 
 ### Changed
- - Removed the brightness slider (it had no effect; use Android's brightness)
+ - Removed the brightness option, Android has this
 
 ### Fixed
- - Touch controls permanently hidden on some phones with built-in or virtual gamepad devices
- - Deleting a pilot failed with "couldn't delete pilot"
+ - Touch controls perma hidden
 
 ## [0.3 (10-13-2026)]
 

@@ -319,17 +319,33 @@ ubyte Secondary_last_was_super[MAX_SECONDARY_WEAPONS];
 
 //	------------------------------------------------------------------------------------
 //	Select a weapon, primary or secondary.
+void do_weapon_select_direct(int weapon_num, int secondary_flag);
+
 void do_weapon_select(int secondary_flag)
 {
+	do_weapon_select_step(secondary_flag, 1);
+}
+
+//	Cycle to the next (step = 1) or previous (step = -1) owned weapon, wrapping around.
+void do_weapon_select_step(int secondary_flag, int step)
+{
 	int weapon_num = secondary_flag ? Secondary_weapon : Primary_weapon;
+	
+	for (int i = 0; i < 10; ++i) {
+		weapon_num += step;
+		if (weapon_num > 9) weapon_num = 0;
+		if (weapon_num < 0) weapon_num = 9;
+		if (player_has_weapon(weapon_num, secondary_flag) == HAS_ALL) break;
+	}
+	do_weapon_select_direct(weapon_num, secondary_flag);
+}
+
+//	Select one specific weapon (with the usual "don't have it" / "no ammo" messages).
+void do_weapon_select_direct(int weapon_num, int secondary_flag)
+{
 	int	weapon_status;
 	char	*weapon_name;
 	
-	for (int i = 0; i < 10; ++i) {
-		++weapon_num;
-		if (weapon_num > 9) weapon_num = 0;
-		if (player_has_weapon(weapon_num, secondary_flag) == HAS_ALL) break;
-	}
 	weapon_status = player_has_weapon(weapon_num, secondary_flag);
 	
 #ifdef SHAREWARE	// do special hud msg. for picking registered weapon in shareware version.

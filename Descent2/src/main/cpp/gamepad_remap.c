@@ -1,5 +1,5 @@
 //
-// Remap Gamepad -- lets the player rebind GP_NUM_ACTIONS (24) gameplay actions to
+// Remap Gamepad -- lets the player rebind GP_NUM_ACTIONS (48) gameplay actions to
 // gamepad buttons: the original 7 (Fire Primary/Secondary/Flare, Rear View, Bank
 // Left/Right, Toggle Cockpit) plus Slide On, Bank On, Drop Bomb, Automap, Cruise
 // Faster/Slower/Off, Slide Up and Slide Down, Energy->Shield, Headlight, Afterburner,
@@ -65,7 +65,7 @@
 #define GP_TRIGGER_LT 1001
 #define GP_TRIGGER_RT 1002
 
-#define GP_NUM_ACTIONS 24
+#define GP_NUM_ACTIONS 48
 #define GP_UNBOUND (-1)
 
 typedef struct GamepadRemapAction {
@@ -128,6 +128,32 @@ static const GamepadRemapAction Gamepad_remap_actions[GP_NUM_ACTIONS] = {
 	{ "Toggle Bomb",    KEY_X,        GP_UNBOUND },
 	{ "Place Marker",   KEY_F4,       GP_UNBOUND },
 	{ "Guide-Bot Menu", KEY_LSHIFT,   GP_UNBOUND, KEY_F4 },
+	// Added later (storage indices 24..47) -- all GP_UNBOUND. 24..27: step through owned weapons
+	// (Next = same as the 1/6 keys, Prev = [ and ]); 28..47: select that exact weapon.
+	{ "Next Primary",   KEY_1,         GP_UNBOUND },
+	{ "Next Secondary", KEY_6,         GP_UNBOUND },
+	{ "Prev Primary",   KEY_LBRACKET,  GP_UNBOUND },
+	{ "Prev Secondary", KEY_RBRACKET,  GP_UNBOUND },
+	{ "Pri: Laser", KEY_GP_WEAPON_SC(0), GP_UNBOUND },
+	{ "Pri: Vulcan", KEY_GP_WEAPON_SC(1), GP_UNBOUND },
+	{ "Pri: Spreadfire", KEY_GP_WEAPON_SC(2), GP_UNBOUND },
+	{ "Pri: Plasma", KEY_GP_WEAPON_SC(3), GP_UNBOUND },
+	{ "Pri: Fusion", KEY_GP_WEAPON_SC(4), GP_UNBOUND },
+	{ "Pri: Super Laser", KEY_GP_WEAPON_SC(5), GP_UNBOUND },
+	{ "Pri: Gauss", KEY_GP_WEAPON_SC(6), GP_UNBOUND },
+	{ "Pri: Helix", KEY_GP_WEAPON_SC(7), GP_UNBOUND },
+	{ "Pri: Phoenix", KEY_GP_WEAPON_SC(8), GP_UNBOUND },
+	{ "Pri: Omega", KEY_GP_WEAPON_SC(9), GP_UNBOUND },
+	{ "Sec: Concussion", KEY_GP_WEAPON_SC(10), GP_UNBOUND },
+	{ "Sec: Homing", KEY_GP_WEAPON_SC(11), GP_UNBOUND },
+	{ "Sec: Proximity", KEY_GP_WEAPON_SC(12), GP_UNBOUND },
+	{ "Sec: Smart", KEY_GP_WEAPON_SC(13), GP_UNBOUND },
+	{ "Sec: Mega", KEY_GP_WEAPON_SC(14), GP_UNBOUND },
+	{ "Sec: Flash", KEY_GP_WEAPON_SC(15), GP_UNBOUND },
+	{ "Sec: Guided", KEY_GP_WEAPON_SC(16), GP_UNBOUND },
+	{ "Sec: Smart Mine", KEY_GP_WEAPON_SC(17), GP_UNBOUND },
+	{ "Sec: Mercury", KEY_GP_WEAPON_SC(18), GP_UNBOUND },
+	{ "Sec: Earthshaker", KEY_GP_WEAPON_SC(19), GP_UNBOUND },
 };
 
 // Live, persisted bindings -- consulted every time a gamepad button event arrives.
@@ -138,6 +164,10 @@ int Gamepad_bound_keycodes[GP_NUM_ACTIONS] = {
 	GP_BUTTON_A, GP_BUTTON_B, GP_BUTTON_X, GP_BUTTON_Y, GP_BUTTON_L1, GP_BUTTON_R1, GP_BUTTON_THUMBL,
 	GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND,
 	GP_UNBOUND, GP_UNBOUND,
+	GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND,
+	// 24..47 (cycle + per-weapon actions) -- all unbound
+	GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND,
+	GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND,
 	GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND, GP_UNBOUND
 };
 
@@ -358,13 +388,17 @@ static int gamepad_remap_poll_confirm(void) {
 // saved bindings valid -- can still be listed right under Slide On where they belong.
 // Must list every action index 0..GP_NUM_ACTIONS-1 exactly once.
 static const int Gamepad_remap_display_order[GP_NUM_ACTIONS] = {
-	0, 1, 2, 19, 20, 3, 4, 5, 6,  // Fire Primary/Secondary/Flare, Cycle Primary/Secondary, Rear View .. Toggle Cockpit
+	0, 1, 2, 19, 20,             // Fire Primary/Secondary/Flare, Cycle Primary/Secondary
+	24, 26, 25, 27,               // Next/Prev Primary, Next/Prev Secondary
+	3, 4, 5, 6,                   // Rear View .. Toggle Cockpit
 	7, 14, 15,                    // Slide On, Slide Up, Slide Down
 	8, 18,                        // Bank On, Afterburner
 	9, 21,                        // Drop Bomb, Toggle Bomb
 	16, 17,                       // Energy->Shield, Headlight
 	10, 22, 23,                   // Automap, Place Marker, Guide-Bot Menu
-	11, 12, 13                    // Cruise Faster/Slower/Off
+	11, 12, 13,                  // Cruise Faster/Slower/Off
+	28, 29, 30, 31, 32, 33, 34, 35, 36, 37,  // Select exact primary weapon
+	38, 39, 40, 41, 42, 43, 44, 45, 46, 47   // Select exact secondary weapon
 };
 #define GP_ACTION_AT_ROW(row) (Gamepad_remap_display_order[(row) - GP_ACTIONS_START])
 

@@ -1963,6 +1963,76 @@ void HandleGameKey(int key)
 			do_weapon_select(1);
 			break;
 
+		case KEY_LBRACKET:
+			do_weapon_select_step(0, -1);
+			break;
+
+		case KEY_RBRACKET:
+			do_weapon_select_step(1, -1);
+			break;
+
+		// Gamepad remap: select an exact weapon (see KEY_GP_WEAPON_SC in key.h).
+		case KEY_GP_WEAPON_SC(0):
+			do_weapon_select_direct(0, 0);
+			break;
+		case KEY_GP_WEAPON_SC(1):
+			do_weapon_select_direct(1, 0);
+			break;
+		case KEY_GP_WEAPON_SC(2):
+			do_weapon_select_direct(2, 0);
+			break;
+		case KEY_GP_WEAPON_SC(3):
+			do_weapon_select_direct(3, 0);
+			break;
+		case KEY_GP_WEAPON_SC(4):
+			do_weapon_select_direct(4, 0);
+			break;
+		case KEY_GP_WEAPON_SC(5):
+			do_weapon_select_direct(5, 0);
+			break;
+		case KEY_GP_WEAPON_SC(6):
+			do_weapon_select_direct(6, 0);
+			break;
+		case KEY_GP_WEAPON_SC(7):
+			do_weapon_select_direct(7, 0);
+			break;
+		case KEY_GP_WEAPON_SC(8):
+			do_weapon_select_direct(8, 0);
+			break;
+		case KEY_GP_WEAPON_SC(9):
+			do_weapon_select_direct(9, 0);
+			break;
+		case KEY_GP_WEAPON_SC(10):
+			do_weapon_select_direct(0, 1);
+			break;
+		case KEY_GP_WEAPON_SC(11):
+			do_weapon_select_direct(1, 1);
+			break;
+		case KEY_GP_WEAPON_SC(12):
+			do_weapon_select_direct(2, 1);
+			break;
+		case KEY_GP_WEAPON_SC(13):
+			do_weapon_select_direct(3, 1);
+			break;
+		case KEY_GP_WEAPON_SC(14):
+			do_weapon_select_direct(4, 1);
+			break;
+		case KEY_GP_WEAPON_SC(15):
+			do_weapon_select_direct(5, 1);
+			break;
+		case KEY_GP_WEAPON_SC(16):
+			do_weapon_select_direct(6, 1);
+			break;
+		case KEY_GP_WEAPON_SC(17):
+			do_weapon_select_direct(7, 1);
+			break;
+		case KEY_GP_WEAPON_SC(18):
+			do_weapon_select_direct(8, 1);
+			break;
+		case KEY_GP_WEAPON_SC(19):
+			do_weapon_select_direct(9, 1);
+			break;
+
 		case KEY_1 + KEY_SHIFTED:
 		case KEY_2 + KEY_SHIFTED:
 		case KEY_3 + KEY_SHIFTED:
