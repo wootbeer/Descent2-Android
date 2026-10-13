@@ -726,9 +726,13 @@ try_again:
 	return 1;
 }
 
-#ifdef WINDOWS
+#if defined(WINDOWS) || defined(ANDROID_NDK)
 #undef TXT_SELECT_PILOT
+#ifdef ANDROID_NDK
+#define TXT_SELECT_PILOT "Select pilot\nPress X or hold to delete"
+#else
 #define TXT_SELECT_PILOT "Select pilot\n<Ctrl-D> or Right-click\nto delete"
+#endif
 #endif
 
 //Inputs the player's name, without putting up the background screen

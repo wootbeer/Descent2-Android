@@ -142,6 +142,8 @@ int Menu_draw_copyright = 0;
 // "invert Y enabled", so this defaults ON (1) to keep existing behavior unchanged; turning
 // it off is what flips anything. See gamepad_remap.c's isInvertYEnabled() JNI getter.
 int Config_invert_y = 1;
+int Config_analog_look = 0;		// gamepad stick look is analog (scaled by the sensitivity slider) instead of on/off
+int Config_ship_bobbing = 1;		// the ship's idle up/down wiggle (PF_WIGGLE); saved in the pilot file
 
 // Android-side hooks -- Descent2/src/main/cpp/motion.c and gamepad_remap.c.
 extern void startMotion();
@@ -1076,6 +1078,50 @@ void do_screen_res_menu()
 // missions per page plus "Next/Previous Page" rows, so touch and gamepad both work.
 // Returns the chosen index into Mission_list, or -1 if cancelled.
 #define MISSIONS_PER_PAGE 6
+
+#ifdef ANDROID_NDK
+#include <dirent.h>
+#include <unistd.h>
+#include "cfile.h"		// Document_path
+
+// Removes an imported mission pack: NAME.MN2 and NAME.HOG (any letter case) from the app's
+// document directory. Returns how many files were deleted.
+static int delete_mission_pack_files(const char *name)
+{
+	DIR *dir;
+	struct dirent *ent;
+	int removed = 0;
+	size_t len = strlen(name);
+
+	if (!Document_path || len == 0 || (dir = opendir(Document_path)) == NULL)
+		return 0;
+	while ((ent = readdir(dir)) != NULL) {
+		if (strlen(ent->d_name) == len + 4 && strncasecmp(ent->d_name, name, len) == 0 &&
+			(strcasecmp(ent->d_name + len, ".MN2") == 0 || strcasecmp(ent->d_name + len, ".HOG") == 0)) {
+			char path[1024];
+			snprintf(path, sizeof(path), "%s/%s", Document_path, ent->d_name);
+			if (unlink(path) == 0)
+				removed++;
+		}
+	}
+	closedir(dir);
+	return removed;
+}
+
+// The mission chooser's per-frame hook: X on the gamepad (sent as the Delete key) or the
+// keyboard Delete key asks to remove the highlighted imported mission by closing the chooser.
+static int Mission_delete_row = -1;
+static int Mission_rows_on_page = 0;
+
+static void mission_select_subfunc(int nitems, newmenu_item *items, int *last_key, int citem)
+{
+	if (*last_key == KEY_DELETE && citem >= 0 && citem < Mission_rows_on_page) {
+		Mission_delete_row = citem;
+		*last_key = KEY_ESC;
+	}
+}
+#endif
+
 static int do_mission_select_menu(int n_missions, int default_mission)
 {
 	newmenu_item m[MISSIONS_PER_PAGE + 2];
@@ -1090,6 +1136,10 @@ static int do_mission_select_menu(int n_missions, int default_mission)
 
 		if (count > MISSIONS_PER_PAGE)
 			count = MISSIONS_PER_PAGE;
+#ifdef ANDROID_NDK
+		Mission_rows_on_page = count;
+		Mission_delete_row = -1;
+#endif
 
 		for (i = 0; i < count; i++) {
 			m[n].type = NM_TYPE_MENU;
@@ -1107,7 +1157,39 @@ static int do_mission_select_menu(int n_missions, int default_mission)
 			n++;
 		}
 
+#ifdef ANDROID_NDK
+		choice = newmenu_do1("New Game", "Select mission (X removes a pack)", n, m, mission_select_subfunc, citem);
+
+		if (choice < 0 && Mission_delete_row >= 0) {
+			// X / Delete on a mission: offer to remove it (the built-in mission can't be removed).
+			int victim = first + Mission_delete_row;
+
+			citem = Mission_delete_row;
+			if (victim == 0) {
+				nm_messagebox(NULL, 1, TXT_OK, "The built-in mission can't be removed.");
+			} else if (nm_messagebox(NULL, 2, TXT_YES, TXT_NO, "Remove mission pack\n%s?", Mission_list[victim].mission_name) == 0) {
+				char fname[16];
+
+				strncpy(fname, Mission_list[victim].filename, sizeof(fname) - 1);
+				fname[sizeof(fname) - 1] = 0;
+				if (delete_mission_pack_files(fname) == 0) {
+					nm_messagebox(NULL, 1, TXT_OK, "Couldn't remove that mission pack.");
+				} else {
+					// Rebuild the list (indices change), then keep the same spot on the same page.
+					n_missions = build_mission_list(0);
+					if (n_missions <= 1)
+						return -1;
+					n_pages = (n_missions + MISSIONS_PER_PAGE - 1) / MISSIONS_PER_PAGE;
+					if (page >= n_pages)
+						page = n_pages - 1;
+					citem = 0;
+				}
+			}
+			continue;
+		}
+#else
 		choice = newmenu_do1("New Game", "Select mission", n, m, NULL, citem);
+#endif
 
 		if (choice < 0)
 			return -1;
@@ -1150,7 +1232,7 @@ void do_new_game_menu()
 		if (new_mission_num == -1)
 			return;         //abort!
 
-		strcpy(config_last_mission, m[new_mission_num]  );
+		strcpy(config_last_mission, Mission_list[new_mission_num].mission_name );
 		
 		if (!load_mission(new_mission_num)) {
 			nm_messagebox( NULL, 1, TXT_OK, "Error in Mission file\n\n%s", Mission_load_error);
@@ -1224,7 +1306,7 @@ extern void GameLoop(int, int );
 #if defined(POLY_ACC)
 #define N_TOGGLE_ITEMS 6        // get rid of automap hi-res.
 #else
-#define N_TOGGLE_ITEMS 7
+#define N_TOGGLE_ITEMS 8
 #endif
 #else
 #define N_TOGGLE_ITEMS 7
@@ -1259,6 +1341,7 @@ extern void GameLoop(int, int );
 				ADD_CHECK(6, "Always show HighRes Automap", fmin(MenuHiresAvailable,Automap_always_hires));
 #endif
 #endif
+				ADD_CHECK(7, "Ship bobbing", Config_ship_bobbing);
 				//when adding more options, change N_TOGGLE_ITEMS above
 				
 #ifdef MACINTOSH
@@ -1274,6 +1357,7 @@ extern void GameLoop(int, int );
 				Headlight_active_default	= m[3].value;
 				Guided_in_big_window		= m[4].value;
 				EscortHotKeys				= m[5].value;
+				Config_ship_bobbing			= m[7].value;
 				
 				
 #ifdef MACINTOSH
@@ -1453,7 +1537,7 @@ void joydef_menuset(int nitems, newmenu_item * items, int *last_key, int citem )
 	nitems=nitems;
 	*last_key = *last_key;
 
-	if ( citem == brightness_item )	{
+	if ( brightness_item >= 0 && citem == brightness_item )	{
 		gr_palette_set_gamma(items[brightness_item].value);
 	}
 
@@ -1492,7 +1576,7 @@ void do_options_menu()
 	int have_gyroscope = haveGyroscope();
 	// The touch sliders only mean something where the on-screen buttons are visible, i.e. in a level.
 	int have_touch = (Function_mode == FMODE_GAME);
-	int n, remap_item, sens_item, invert_item, gyro_item, video_item, toggles_item, packs_item;
+	int n, remap_item, sens_item, invert_item, analog_item, gyro_item, video_item, toggles_item, packs_item;
 	Options_menu_have_gyroscope = have_gyroscope;
 
 	do {
@@ -1515,6 +1599,8 @@ void do_options_menu()
 		}
 		invert_item = n;
 		m[n].type = NM_TYPE_CHECK; m[n].text="Invert Y"; m[n].value=Config_invert_y; n++;
+		analog_item = n;
+		m[n].type = NM_TYPE_CHECK; m[n].text="Analog stick look"; m[n].value=Config_analog_look; n++;
 		m[n].type = NM_TYPE_TEXT; m[n].text=""; n++;
 		// Ship auto-leveling lives only in the Toggles menu.
 		gyro_item = -1;
@@ -1523,8 +1609,8 @@ void do_options_menu()
 			m[n].type = NM_TYPE_CHECK; m[n].text = "Use Gyroscope"; m[n].value = Config_use_gyroscope; n++;
 		}
 		m[n].type = NM_TYPE_TEXT; m[n].text=""; n++;
-		Options_brightness_item = n;
-		m[n].type = NM_TYPE_SLIDER; m[n].text=TXT_BRIGHTNESS; m[n].value=gr_palette_get_gamma();m[n].min_value=0; m[n].max_value=8; n++;
+		// No brightness slider on Android: palette gamma has no effect on the GL renderer, and the
+		// system brightness setting does the job.
 		video_item = n;
 		m[n].type = NM_TYPE_MENU; m[n].text="Video Options"; n++;
 		toggles_item = n;
@@ -1570,6 +1656,7 @@ void do_options_menu()
 			Config_touch_control_opacity = (ubyte) m[Options_touch_opacity_item].value;
 		}
 		Config_invert_y = m[invert_item].value;
+		Config_analog_look = m[analog_item].value;
 		if (have_gyroscope) {
 			if (Config_use_gyroscope != m[gyro_item].value) {
 				if (m[gyro_item].value) {

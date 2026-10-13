@@ -148,8 +148,42 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			return false;
 		}
 		int sources = device.getSources();
-		return (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+		boolean looksLikeGamepad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
 				|| (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+		if (!looksLikeGamepad) {
+			return false;
+		}
+		// Software-made input devices (remote-control apps, game-assist layers) are not
+		// controllers the player is holding.
+		if (Build.VERSION.SDK_INT >= 16 && device.isVirtual()) {
+			return false;
+		}
+		// A real controller has face buttons.
+		if (Build.VERSION.SDK_INT >= 19) {
+			boolean[] has = device.hasKeys(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B,
+					KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y);
+			if (!(has[0] || has[1] || has[2] || has[3])) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private boolean gamepadInputSeen = false;
+
+	// What native code is told: a gamepad only counts as "connected" (touch controls hidden,
+	// stray taps ignored in flight) once it has actually produced input. Some phones expose
+	// virtual input devices that look like gamepads to InputManager but never send anything,
+	// which would otherwise hide the touch controls permanently.
+	private void updateGamepadConnected() {
+		setGamepadConnected(gamepadInputSeen && !connectedGamepadIds.isEmpty());
+	}
+
+	private void markGamepadInputSeen() {
+		if (!gamepadInputSeen) {
+			gamepadInputSeen = true;
+			updateGamepadConnected();
+		}
 	}
 
 	private void scanForGamepads() {
@@ -159,21 +193,22 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 				connectedGamepadIds.add(deviceId);
 			}
 		}
-		setGamepadConnected(!connectedGamepadIds.isEmpty());
+		updateGamepadConnected();
 	}
 
 	@Override
 	public void onInputDeviceAdded(int deviceId) {
 		if (isGamepad(InputDevice.getDevice(deviceId))) {
 			connectedGamepadIds.add(deviceId);
-			setGamepadConnected(!connectedGamepadIds.isEmpty());
+			updateGamepadConnected();
 		}
 	}
 
 	@Override
 	public void onInputDeviceRemoved(int deviceId) {
 		if (connectedGamepadIds.remove(deviceId)) {
-			setGamepadConnected(!connectedGamepadIds.isEmpty());
+			setLookStick(0, 0);
+			updateGamepadConnected();
 		}
 	}
 
@@ -184,7 +219,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		} else {
 			connectedGamepadIds.remove(deviceId);
 		}
-		setGamepadConnected(!connectedGamepadIds.isEmpty());
+		updateGamepadConnected();
 	}
 
 	// --- Gamepad analog input (sticks + triggers) -------------------------------------------
@@ -249,6 +284,12 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			// flight-camera preference and should never change which way a menu scrolls.
 			boolean menuOpen = isMenuOpen();
 
+			if (Math.abs(lx) > 0.5f || Math.abs(ly) > 0.5f || Math.abs(rx) > 0.5f
+					|| Math.abs(ry) > 0.5f || lt > TRIGGER_DEADZONE || rt > TRIGGER_DEADZONE
+					|| hatX != 0f || hatY != 0f) {
+				markGamepadInputSeen();
+			}
+
 			menuNavLeftDown = updateDigitalAxis(menuNavLeftDown, menuOpen && lx < -STICK_DEADZONE, (char) 0xCB);  // KEY_LEFT
 			menuNavRightDown = updateDigitalAxis(menuNavRightDown, menuOpen && lx > STICK_DEADZONE, (char) 0xCD); // KEY_RIGHT
 			menuNavUpDown = updateDigitalAxis(menuNavUpDown, menuOpen && ly < -STICK_DEADZONE, (char) 0xC8);      // KEY_UP
@@ -273,6 +314,19 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			// right in Modern). Nothing else -- turn, slide, thrust -- is affected.
 			boolean invertY = isInvertYEnabled();
 
+			// Options > "Analog stick look": the look stick (left in Standard, right in Modern)
+			// turns/pitches in proportion to how far it is pushed -- and scaled by the
+			// sensitivity slider in native code -- instead of sending on/off arrow keys.
+			boolean analogLook = isAnalogLookEnabled();
+			float lookX = modern ? rx : lx;
+			float lookY = modern ? ry : ly;
+			if (analogLook && !menuOpen) {
+				setLookStick((int) (shapeLookAxis(lookX) * 65536f),
+						(int) (shapeLookAxis(invertY ? -lookY : lookY) * 65536f));
+			} else {
+				setLookStick(0, 0);
+			}
+
 			// Every condition below is gated on !menuOpen (rather than skipping this whole
 			// block while a menu is open) so that a key already held when the menu opened
 			// -- e.g. the player was mid-turn when they paused -- gets a proper release call
@@ -280,14 +334,14 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			// event happens to change the raw axis again.
 			if (!modern) {
 				// Standard: left stick turns/pitches, right stick slides, triggers thrust.
-				turnLeftDown = updateDigitalAxis(turnLeftDown, !menuOpen && lx < -STICK_DEADZONE, (char) 0xCB);  // KEY_LEFT
-				turnRightDown = updateDigitalAxis(turnRightDown, !menuOpen && lx > STICK_DEADZONE, (char) 0xCD); // KEY_RIGHT
+				turnLeftDown = updateDigitalAxis(turnLeftDown, !menuOpen && !analogLook && lx < -STICK_DEADZONE, (char) 0xCB);  // KEY_LEFT
+				turnRightDown = updateDigitalAxis(turnRightDown, !menuOpen && !analogLook && lx > STICK_DEADZONE, (char) 0xCD); // KEY_RIGHT
 				if (invertY) {
-					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && ly < -STICK_DEADZONE, (char) 0xC8);    // KEY_UP
-					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && ly > STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
+					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && !analogLook && ly < -STICK_DEADZONE, (char) 0xC8);    // KEY_UP
+					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && !analogLook && ly > STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
 				} else {
-					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && ly > STICK_DEADZONE, (char) 0xC8);     // KEY_UP
-					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && ly < -STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
+					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && !analogLook && ly > STICK_DEADZONE, (char) 0xC8);     // KEY_UP
+					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && !analogLook && ly < -STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
 				}
 
 				slideLeftDown = updateDigitalAxis(slideLeftDown, !menuOpen && rx < -STICK_DEADZONE, (char) 0x4F);  // KEY_PAD1
@@ -312,14 +366,14 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 				// Note: vertical strafe (slide up/down) has no stick or trigger driving it
 				// in this layout -- both stick Y axes and both triggers are already spoken
 				// for above.
-				turnLeftDown = updateDigitalAxis(turnLeftDown, !menuOpen && rx < -STICK_DEADZONE, (char) 0xCB);  // KEY_LEFT
-				turnRightDown = updateDigitalAxis(turnRightDown, !menuOpen && rx > STICK_DEADZONE, (char) 0xCD); // KEY_RIGHT
+				turnLeftDown = updateDigitalAxis(turnLeftDown, !menuOpen && !analogLook && rx < -STICK_DEADZONE, (char) 0xCB);  // KEY_LEFT
+				turnRightDown = updateDigitalAxis(turnRightDown, !menuOpen && !analogLook && rx > STICK_DEADZONE, (char) 0xCD); // KEY_RIGHT
 				if (invertY) {
-					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && ry < -STICK_DEADZONE, (char) 0xC8);    // KEY_UP
-					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && ry > STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
+					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && !analogLook && ry < -STICK_DEADZONE, (char) 0xC8);    // KEY_UP
+					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && !analogLook && ry > STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
 				} else {
-					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && ry > STICK_DEADZONE, (char) 0xC8);     // KEY_UP
-					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && ry < -STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
+					pitchUpDown = updateDigitalAxis(pitchUpDown, !menuOpen && !analogLook && ry > STICK_DEADZONE, (char) 0xC8);     // KEY_UP
+					pitchDownDown = updateDigitalAxis(pitchDownDown, !menuOpen && !analogLook && ry < -STICK_DEADZONE, (char) 0xD0); // KEY_DOWN
 				}
 
 				slideLeftDown = updateDigitalAxis(slideLeftDown, !menuOpen && lx < -STICK_DEADZONE, (char) 0x4F);  // KEY_PAD1
@@ -335,6 +389,20 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			return true;
 		}
 		return super.onGenericMotionEvent(event);
+	}
+
+	// Small dead zone, then a gentle curve so small pushes aim finely and a full push is full speed.
+	private static float shapeLookAxis(float v) {
+		float a = Math.abs(v);
+		if (a < 0.12f) {
+			return 0f;
+		}
+		a = (a - 0.12f) / 0.88f;
+		if (a > 1f) {
+			a = 1f;
+		}
+		a = a * (0.35f + 0.65f * a);
+		return v < 0f ? -a : a;
 	}
 
 	private boolean updateDigitalAxis(boolean wasDown, boolean isDown, char key) {
@@ -398,6 +466,12 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		}
 		if (!fromGamepad) {
 			return false;
+		}
+		// X in a menu is "Delete" -- it deletes the highlighted pilot in the pilot list (a
+		// gamepad has no Delete key). Outside menus X stays a remappable action.
+		if (keyCode == KeyEvent.KEYCODE_BUTTON_X && isMenuOpen() && !isInRemapGamepadScreen()) {
+			keyHandler((char) 0xD3, down); // KEY_DELETE
+			return true;
 		}
 		char key;
 		switch (keyCode) {
@@ -558,8 +632,16 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		}
 		if (!touchHandled && (action == MotionEvent.ACTION_DOWN ||
 				action == MotionEvent.ACTION_UP)) {
+			boolean mouseDown = action == MotionEvent.ACTION_DOWN;
+			// With a gamepad connected, a stray touch during flight (a thumb or palm on the
+			// handheld's screen) must not act as a mouse click -- that is the primary fire
+			// button. Menus still take touches. A release is always passed through.
+			if (mouseDown && gamepadInputSeen && !connectedGamepadIds.isEmpty() && isInGame()
+					&& !isMenuOpen()) {
+				return true;
+			}
 			mouseHandler((short) (event.getX() * renderScale), (short) (event.getY() * renderScale),
-					action == MotionEvent.ACTION_DOWN);
+					mouseDown);
 			return true;
 		} else {
 			mouseSetPos((short) (event.getX() * renderScale), (short) (event.getY() * renderScale));
@@ -633,6 +715,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		}
 		if (handleGamepadKey(keyCode, true, event)) {
 			gamepadKeysHeld.add(keyCode);
+			markGamepadInputSeen();
 			return true;
 		}
 		if (keyCode == KeyEvent.KEYCODE_DEL) {
@@ -726,6 +809,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 
 	@Override
 	public void surfaceDestroyed(SurfaceHolder holder) {
+		setLookStick(0, 0);
 		surfaceWasDestroyed = true;
 		surfaceWasDestroyed();
 	}
@@ -925,6 +1009,10 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	private static native boolean isModernStickLayout();
 
 	private static native boolean isInvertYEnabled();
+
+	private static native boolean isAnalogLookEnabled();
+
+	private static native void setLookStick(int x, int y);
 
 	private static native boolean isMenuOpen();
 

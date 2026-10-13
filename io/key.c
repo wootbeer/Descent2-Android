@@ -495,7 +495,7 @@ void key_handler(unsigned char scancode, bool down) {
 			if (keyd_pressed[KEY_LCTRL] || keyd_pressed[KEY_RCTRL])
 				keycode |= KEY_CTRLED;
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) && !defined(ANDROID_NDK)	// (Android: Delete is a real key -- gamepad X in menus -- so it must not tag the next keys as 'debugged')
 			if (keyd_pressed[KEY_DELETE])
 				keycode |= KEY_DEBUGGED;
 #endif

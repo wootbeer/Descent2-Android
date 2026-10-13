@@ -468,5 +468,26 @@ Java_wootbeer_descent2_DescentView_touchHandler(JNIEnv *env, jclass clazz, jint 
 // connected, the on-screen touch buttons are hidden and stop consuming touches.
 JNIEXPORT void JNICALL Java_wootbeer_descent2_DescentView_setGamepadConnected(JNIEnv *env, jclass type,
 																			 jboolean connected) {
+	bool was_connected = Gamepad_connected;
 	Gamepad_connected = connected;
+	if (connected && !was_connected) {
+		// A finger left resting on the touch controls when a gamepad takes over would
+		// otherwise leave its button's key held down (touch events stop being routed
+		// here, so the matching release never arrives). Let go of everything the touch
+		// UI could be holding and forget any in-progress touches.
+		for (int i = 0; i < 10; ++i) {
+			int n = touchButtons[i];
+			if (n != -1) {
+				for (int j = 0; j < buttons[n].nKeys; ++j) {
+					if (n == ACCELERATE_BTN) {
+						key_handler(KEY_S, false);
+					}
+					key_handler(buttons[n].keys[j], false);
+				}
+			}
+			touchButtons[i] = -1;
+		}
+		trackingTouch = -1;
+		touch_dx = touch_dy = 0;
+	}
 }

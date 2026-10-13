@@ -51,6 +51,7 @@ fix Afterburner_charge=f1_0;
 #define AFTERBURNER_USE_SECS	3				//use up in 3 seconds
 #define DROP_DELTA_TIME			(f1_0/15)	//drop 3 per second
 
+extern int Config_ship_bobbing;
 extern int Drop_afterburner_blob_flag;		//ugly hack
 
 extern fix	Seismic_tremor_magnitude;
@@ -156,7 +157,7 @@ void read_flying_controls( object * obj )
 	// slide up/down
 	vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.uvec, Controls.vertical_thrust_time );
 
-	if (obj->mtype.phys_info.flags & PF_WIGGLE) {
+	if ((obj->mtype.phys_info.flags & PF_WIGGLE) && Config_ship_bobbing) {
 		fix swiggle;
 		fix_fastsincos(GameTime, &swiggle, NULL);
 		vm_vec_scale_add2(&obj->mtype.phys_info.velocity,&obj->orient.uvec,fixmul(swiggle,Player_ship->wiggle));

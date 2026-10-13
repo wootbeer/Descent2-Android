@@ -76,6 +76,8 @@ extern int Gamepad_bound_keycodes[];
 extern void gamepad_remap_reset_to_defaults(void);
 extern int Gamepad_stick_layout;
 extern int Config_invert_y;
+extern int Config_ship_bobbing;
+extern int Config_analog_look;
 extern ubyte Config_touch_control_scale;
 extern ubyte Config_touch_control_opacity;
 extern void touch_control_scale_changed(void);
@@ -476,6 +478,8 @@ int read_player_file()
 		// Seed Android defaults so a pilot with no saved values doesn't inherit the previous pilot's.
 		gamepad_remap_reset_to_defaults();
 		Config_invert_y = 1;
+		Config_ship_bobbing = 1;
+		Config_analog_look = 0;
 		Config_use_gyroscope = 0;
 		Config_touch_control_scale = 2;
 		Config_touch_control_opacity = 4;
@@ -517,7 +521,14 @@ int read_player_file()
 						for (gi = 0; gi < GAMEPAD_REMAP_NUM_NEWER_ACTIONS; gi++)
 							Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + gi] = kc2[gi];
 						if (player_file_version >= 26 && fread(&b, sizeof(ubyte), 1, file) == 1)
+{
+							// Bit 7 of this byte is "ship bobbing off" and bit 6 is "analog stick look";
+							// the opacity is the low 3 bits.
+							Config_ship_bobbing = (b & 0x80) ? 0 : 1;
+							Config_analog_look = (b & 0x40) ? 1 : 0;
+							b &= 0x3F;
 							Config_touch_control_opacity = (b > 7) ? 4 : b;
+						}
 						if (player_file_version >= 27 && fread(kc8, sizeof(short), GAMEPAD_REMAP_NUM_NEWEST_ACTIONS, file) == GAMEPAD_REMAP_NUM_NEWEST_ACTIONS) {
 							for (gi = 0; gi < GAMEPAD_REMAP_NUM_NEWEST_ACTIONS; gi++)
 								Gamepad_bound_keycodes[GAMEPAD_REMAP_NUM_ACTIONS + GAMEPAD_REMAP_NUM_NEW_ACTIONS + GAMEPAD_REMAP_NUM_NEWER_ACTIONS + gi] = kc8[gi];
@@ -763,7 +774,7 @@ int write_player_file()
 			ubyte stick_layout = (ubyte) Gamepad_stick_layout;
 			ubyte invert_y = (ubyte) Config_invert_y;
 			ubyte touch_scale = Config_touch_control_scale;
-			ubyte touch_opacity = Config_touch_control_opacity;
+			ubyte touch_opacity = Config_touch_control_opacity | (Config_ship_bobbing ? 0 : 0x80) | (Config_analog_look ? 0x40 : 0);
 			int gi;
 
 			for (gi = 0; gi < GAMEPAD_REMAP_NUM_ACTIONS; gi++)

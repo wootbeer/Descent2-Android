@@ -3,8 +3,8 @@
 	xmlns:tools="http://schemas.android.com/tools"
 	package="wootbeer.descent2"
 	android:installLocation="auto"
-	android:versionCode="3"
-	android:versionName="0.3">
+	android:versionCode="4"
+	android:versionName="0.4">
 
 	<!-- Only used by the typed-folder import on devices with no system folder picker (Android TV) -->
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />

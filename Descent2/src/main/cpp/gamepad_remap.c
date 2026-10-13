@@ -244,6 +244,23 @@ JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_isInvertYEnabled(J
 	return (jboolean) Config_invert_y;
 }
 
+// Options > "Analog stick look" (menu.c). Off by default: sticks then turn/pitch with on/off keys.
+extern int Config_analog_look;
+
+JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_isAnalogLookEnabled(JNIEnv *env, jclass type) {
+	return (jboolean) Config_analog_look;
+}
+
+// Stick deflection for analog look, as 16.16 fixed point in -1..1: positive x = turn right,
+// positive y = pitch up (already adjusted for Invert Y). Read by kconfig.c every frame.
+volatile int Look_stick_x = 0;
+volatile int Look_stick_y = 0;
+
+JNIEXPORT void JNICALL Java_wootbeer_descent2_DescentView_setLookStick(JNIEnv *env, jclass type, jint x, jint y) {
+	Look_stick_x = x;
+	Look_stick_y = y;
+}
+
 // Resets the live table to its compiled-in defaults. Called from playsave.c's
 // read_player_file(), before the trailing fread of the saved bindings, so that a
 // pilot with no saved remap data (a fresh pilot, or one whose .plr predates this

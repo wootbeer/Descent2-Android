@@ -2271,10 +2271,12 @@ void newmenu_file_sort( int n, char *list )
 void delete_player_saved_games(char * name)
 {
 	int i;
-	char filename[16];
+	char filename[PATH_MAX];
 	
 	for (i=0;i<10; i++)	{
-#ifndef MACINTOSH
+#ifdef ANDROID_NDK
+		sprintf( filename, "%s/%s.sg%d", Document_path, name, i );
+#elif !defined(MACINTOSH)
 		sprintf( filename, "%s.sg%d", name, i );
 #else
 		sprintf( filename, ":Players:%s.sg%d", name, i );
@@ -2321,6 +2323,10 @@ int newmenu_get_filename_inner( char * title, char * filespec, char * filename, 
 	int mouse_x, mouse_y;
 	int mouse_down = 0, mouse_up = 0;
 	int gamepad_confirm = 0;
+#ifdef ANDROID_NDK
+	int hold_item = -1, hold_fired = 0;		// press-and-hold on a pilot row = delete (with confirmation)
+	fix hold_start = 0;
+#endif
 	filename_item items[MAX_FILES];
 #if defined(MACINTOSH) || defined(WINDOWS)
 	int mx, my, x1, x2, y1, y2, mouse_state, omouse_state;
@@ -2552,6 +2558,10 @@ RePaintNewmenuFile:
 		if (!mouse_down) {
 			mouse_down = mouse_button_down_count(0, &mouse_x, &mouse_y);
 			mouse_up = 0;
+#ifdef ANDROID_NDK
+			hold_item = -1;
+			hold_fired = 0;
+#endif
 		} else {
 
 			// HACK!!!! Show the menu again when Android pauses
@@ -2574,8 +2584,33 @@ RePaintNewmenuFile:
 				if (hit != -1) {
 					citem = hit;
 				}
+#ifdef ANDROID_NDK
+				// Press and hold (about 0.7 s) on a pilot other than "<Create New>" asks to delete it,
+				// for touch-only players who have no X button.
+				if (player_mode && hit > 0) {
+					if (hit != hold_item) {
+						hold_item = hit;
+						hold_fired = 0;
+						hold_start = timer_get_fixed_seconds();
+					} else if (!hold_fired && timer_get_fixed_seconds() - hold_start > (F1_0 * 7) / 10) {
+						hold_fired = 1;
+						key = KEY_DELETE;
+					}
+				} else {
+					hold_item = -1;
+				}
+#endif
 			}
 		}
+#ifdef ANDROID_NDK
+		if (mouse_up && hold_fired) {
+			// The finger lifting after a long press must not also pick the pilot.
+			mouse_up = 0;
+			mouse_down = 0;
+			hold_fired = 0;
+			hold_item = -1;
+		}
+#endif
 		if (mouse_up || gamepad_confirm) {
 			mouse_down = 0;
 			if (citem != -1) {
@@ -2594,6 +2629,7 @@ RePaintNewmenuFile:
 			MAC(key_flush());
 			break;
 
+		case KEY_DELETE:			// gamepad X in a menu (see DescentView.handleGamepadKey) / keyboard Delete
 		case KEY_CTRLED+KEY_D:
 			#if defined(MACINTOSH) && defined(APPLE_DEMO)
 			break;
@@ -2625,8 +2661,13 @@ RePaintNewmenuFile:
 						*p = '.';
 
 					//_splitpath(filespec,name,dir,NULL,NULL);
+#ifdef ANDROID_NDK
+					// name/dir were never initialized (a DOS leftover); pilots and demos live in Document_path.
+					sprintf(name, "%s/%s", Document_path, &filenames[citem*14]);
+#else
 					strcat(name,dir);
 					strcat(name,&filenames[citem*14]);
+#endif
 					
 					#ifdef MACINTOSH
 					{

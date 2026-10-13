@@ -1704,6 +1704,9 @@ void read_head_tracker()
 
 #define	PH_SCALE	8
 
+extern int Config_analog_look;
+extern volatile int Look_stick_x, Look_stick_y;
+
 #ifdef WINDOWS
 #define	JOYSTICK_READ_TIME	(F1_0/40)		//	Read joystick at 40 Hz.
 #else
@@ -2828,6 +2831,12 @@ void controls_read_all()
 				Controls.pitch_time += (joy_axis[kc_joystick[13].value]*Config_joystick_sensitivity)/8;
 		}
 	
+		// From the gamepad stick in analog mode (Android; Look_stick_y > 0 = pitch up).
+		// Same scale as a real joystick axis (full push = FrameTime * sensitivity / 8), which is
+		// 8x the keyboard rate (keys are divided by PH_SCALE).
+		if (Config_analog_look)
+			Controls.pitch_time += (int)(((long long) Look_stick_y * FrameTime) >> 16) * Config_joystick_sensitivity / 8;
+
 		// From mouse...
 		//mprintf(( 0, "UM: %d, PV: %d\n", use_mouse, kc_mouse[13].value ));
 		if ( (use_mouse)&&(kc_mouse[13].value < 255) )	{
@@ -2954,6 +2963,10 @@ void controls_read_all()
 				Controls.heading_time -= (joy_axis[kc_joystick[15].value]*Config_joystick_sensitivity)/8;
 		}
 	
+		// From the gamepad stick in analog mode (Android; Look_stick_x > 0 = turn right).
+		if (Config_analog_look)
+			Controls.heading_time += (int)(((long long) Look_stick_x * FrameTime) >> 16) * Config_joystick_sensitivity / 8;
+
 		// From mouse...
 		if ( (use_mouse)&&(kc_mouse[15].value < 255 ))	{
 			if ( !kc_mouse[16].value )		// If not inverted...
