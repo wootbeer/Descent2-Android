@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6 (10-15-2026)]
+
+### Added
+ - Disable thief bot toggle
+
+### Changed
+ - Redbook music plays through now
+
+### Fixed
+ - White/gray menu backgrounds and flashing on Mali GPUs
+ - Briefing background disappearing when the robot animation started on Mali
+ - Android TV: folder path screen. added a Type Folder Path button
+
 ## [0.5 (10-13-2026)]
 
 ### Added

@@ -48,6 +48,8 @@ static char rcsid[] = "$Id: fuelcen.c 2.20 1996/09/05 11:13:15 jed Exp $";
 #include "multi.h"
 #include "multibot.h"
 
+extern int Config_disable_thief;	//menu.c -- "Disable thief bot" pilot option
+
 // The max number of fuel stations per mine.
 
 fix Fuelcen_refill_speed = i2f(1);
@@ -529,7 +531,8 @@ void robotmaker_proc( FuelCenter * robotcen )
 					robot_index = i*32;
 					flags = RobotCenters[matcen_num].robot_flags[i];
 					while (flags) {
-						if (flags & 1)
+						//"Disable thief bot" pilot option: robot makers never produce thieves (single player)
+						if ((flags & 1) && !(Config_disable_thief && !(Game_mode & GM_MULTI) && Robot_info[robot_index].thief))
 							legal_types[num_types++] = robot_index;
 						flags >>= 1;
 						robot_index++;
@@ -541,6 +544,8 @@ void robotmaker_proc( FuelCenter * robotcen )
 				//	mprintf((0, "%2i ", legal_types[i]));
 				//mprintf((0, "\n"));
 
+				if (num_types == 0)		//only thieves allowed here and they're disabled
+					break;
 				if (num_types == 1)
 					type = legal_types[0];
 				else

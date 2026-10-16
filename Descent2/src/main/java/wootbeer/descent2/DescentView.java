@@ -944,7 +944,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		egl = (EGL10) EGLContext.getEGL();
 		eglDisplay = egl.eglGetDisplay(EGL10.EGL_DEFAULT_DISPLAY);
 		egl.eglInitialize(eglDisplay, new int[]{1, 0});
-		egl.eglChooseConfig(eglDisplay, new int[]{
+		final int[] configSpec = new int[]{
 				EGL10.EGL_RED_SIZE, 8,
 				EGL10.EGL_GREEN_SIZE, 8,
 				EGL10.EGL_BLUE_SIZE, 8,
@@ -957,11 +957,52 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 				EGL10.EGL_ALPHA_SIZE, 0,
 				EGL10.EGL_DEPTH_SIZE, 16,
 				EGL10.EGL_STENCIL_SIZE, 0,
-				EGL10.EGL_NONE}, configs, 1, num_config);
+				EGL10.EGL_NONE};
+		// The game relies on EGL_BUFFER_PRESERVED (see descentMain() in main.c): menus,
+		// briefings and fades read back the frame that was just presented. Android only honors
+		// that for a config that advertises EGL_SWAP_BEHAVIOR_PRESERVED_BIT, and not every GPU
+		// driver (e.g. Mali) lists that bit on the config it would otherwise pick first --
+		// the result was solid white/gray flashes where the saved background should be.
+		// Keep the usual pick when it already supports that (so devices that worked are
+		// untouched); only when it doesn't, look for a config that does.
+		final int EGL_SURFACE_TYPE = 0x3033;
+		final int EGL_SWAP_BEHAVIOR_PRESERVED_BIT = 0x0400;
+		egl.eglChooseConfig(eglDisplay, configSpec, configs, 1, num_config);
+		boolean hasPreservedBit = false;
+		if (num_config[0] >= 1 && configs[0] != null) {
+			int[] surfaceType = new int[1];
+			if (egl.eglGetConfigAttrib(eglDisplay, configs[0], EGL_SURFACE_TYPE, surfaceType)) {
+				hasPreservedBit = (surfaceType[0] & EGL_SWAP_BEHAVIOR_PRESERVED_BIT) != 0;
+			}
+		}
+		if (!hasPreservedBit) {
+			final int[] preservedSpec = new int[]{
+					EGL10.EGL_RED_SIZE, 8,
+					EGL10.EGL_GREEN_SIZE, 8,
+					EGL10.EGL_BLUE_SIZE, 8,
+					EGL10.EGL_ALPHA_SIZE, 0,
+					EGL10.EGL_DEPTH_SIZE, 16,
+					EGL10.EGL_STENCIL_SIZE, 0,
+					EGL_SURFACE_TYPE, 0x0004 /* EGL_WINDOW_BIT */ | EGL_SWAP_BEHAVIOR_PRESERVED_BIT,
+					EGL10.EGL_NONE};
+			EGLConfig[] preserved = new EGLConfig[1];
+			int[] numPreserved = new int[1];
+			if (egl.eglChooseConfig(eglDisplay, preservedSpec, preserved, 1, numPreserved)
+					&& numPreserved[0] >= 1 && preserved[0] != null) {
+				configs[0] = preserved[0];
+				num_config[0] = numPreserved[0];
+				android.util.Log.i("DescentGL", "Using a config with preserved-swap support");
+			} else {
+				android.util.Log.w("DescentGL", "No EGL config advertises preserved swap");
+			}
+		}
 		eglConfig = configs[0];
+		if (num_config[0] < 1 || eglConfig == null) {
+			return;
+		}
 		eglContext = egl.eglCreateContext(eglDisplay, eglConfig, EGL10.EGL_NO_CONTEXT, attrib_list);
 		eglSurface = egl.eglCreateWindowSurface(eglDisplay, eglConfig, holder, null);
-		if (eglSurface == EGL10.EGL_NO_SURFACE
+		if (eglContext == EGL10.EGL_NO_CONTEXT || eglSurface == EGL10.EGL_NO_SURFACE
 				|| !egl.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
 			// Don't leak the half-built objects: a leaked EGLSurface keeps the native window
 			// "connected", which makes every later eglCreateWindowSurface() fail too.
@@ -970,7 +1011,9 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			if (eglSurface != EGL10.EGL_NO_SURFACE) {
 				egl.eglDestroySurface(eglDisplay, eglSurface);
 			}
-			egl.eglDestroyContext(eglDisplay, eglContext);
+			if (eglContext != EGL10.EGL_NO_CONTEXT) {
+				egl.eglDestroyContext(eglDisplay, eglContext);
+			}
 			return;
 		}
 		gl = (GL10) eglContext.getGL();

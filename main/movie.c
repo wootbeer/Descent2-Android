@@ -196,6 +196,8 @@ int PlayMovie(const char *filename, int must_have)
 
 }
  
+extern int Movie_playing;	//set while a full-screen movie plays (RunMovie)
+
 void MovieShowFrame (ubyte *buf,uint bufw,uint bufh,uint sx,uint sy,uint w,uint h,uint dstx,uint dsty)
 {
 	grs_bitmap source_bm;
@@ -215,7 +217,10 @@ void MovieShowFrame (ubyte *buf,uint bufw,uint bufh,uint sx,uint sy,uint w,uint 
 		if (last[0] != bufw || last[1] != bufh || last[2] != sx || last[3] != sy || last[4] != w || last[5] != h || last[6] != dstx || last[7] != dsty) {
 			last[0] = bufw; last[1] = bufh; last[2] = sx; last[3] = sy; last[4] = w; last[5] = h; last[6] = dstx; last[7] = dsty;
 #ifdef OGLES
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			//Only for full-screen movies (RunMovie). Briefing robot movies draw into a small box
+			//over the briefing screen, so clearing here wiped the whole briefing background.
+			if (Movie_playing)
+				glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 #endif
 		}
 	}

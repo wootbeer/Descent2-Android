@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.DialogInterface;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Environment;
 import android.provider.Settings;
 import android.text.InputType;
@@ -101,6 +103,13 @@ public class DescentActivity extends Activity implements SensorEventListener {
 	// turning the gyroscope on and the first sensor event arriving.
 	private float acceleration[] = new float[3];
 	private int mediaPlayerPosition;
+	// Redbook "play to end of disc" state (like the PC CD player): the track now playing, and
+	// whether to move on to the next one when it ends. Guarded by mediaPlayer's lock, since the
+	// game thread starts/stops tracks and the completion callback runs on the main thread.
+	private int redbookTrack = 0;
+	private boolean redbookContinue = false;
+	private float musicVolume = 1.0f;
+	private static final int REDBOOK_FIRST_LEVEL_TRACK = 4;	// same as songs.c
 	private int refreshPeriodUs;
 
 	@Override
@@ -352,6 +361,18 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		});
 		layout.addView(chooseButton);
 
+		// Always offer the typed-path route too, in case the device's picker is missing or broken
+		// in a way we can't detect (e.g. it opens but only shows an error).
+		Button typeButton = new Button(this);
+		typeButton.setText("Type Folder Path");
+		typeButton.setOnClickListener(new View.OnClickListener() {
+			@Override
+			public void onClick(View v) {
+				showTypedFolderDialog(true);
+			}
+		});
+		layout.addView(typeButton);
+
 		setContentView(layout);
 	}
 
@@ -381,6 +402,10 @@ public class DescentActivity extends Activity implements SensorEventListener {
 					"bundled assets instead.");
 			return;
 		}
+		if (!hasUsableFolderPicker()) {
+			showTypedFolderDialog(true);
+			return;
+		}
 		try {
 			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
 			startActivityForResult(intent, REQUEST_CODE_OPEN_DATA_FOLDER);
@@ -391,6 +416,30 @@ public class DescentActivity extends Activity implements SensorEventListener {
 	}
 
 	// --- Fallback for devices without a system folder picker (Android TV) -------------------
+
+	/**
+	 * True if ACTION_OPEN_DOCUMENT_TREE opens a real folder picker. Android TV / Google TV
+	 * builds often have no picker but do have a "framework package stubs" app that claims the
+	 * intent and only shows "You don't have an app for that" -- so no ActivityNotFoundException
+	 * is thrown. Treat no handler, or only a stub handler, as no picker.
+	 */
+	private boolean hasUsableFolderPicker() {
+		try {
+			Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+			ResolveInfo ri = getPackageManager().resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY);
+			if (ri == null || ri.activityInfo == null) {
+				return false;
+			}
+			String pkg = ri.activityInfo.packageName;
+			if (pkg != null && pkg.toLowerCase(Locale.US).contains("stub")) {
+				android.util.Log.i("Descent", "Folder picker intent goes to stub " + pkg + "; using typed path");
+				return false;
+			}
+		} catch (RuntimeException e) {
+			// Can't tell -- let the normal launch (and its ActivityNotFoundException fallback) decide.
+		}
+		return true;
+	}
 
 	/**
 	 * Asks for a folder path to import from. firstRun: import the base game data (otherwise
@@ -735,6 +784,10 @@ public class DescentActivity extends Activity implements SensorEventListener {
 				if (Build.VERSION.SDK_INT < 21) {
 					Toast.makeText(DescentActivity.this,
 							"This Android version can't select external files.", Toast.LENGTH_LONG).show();
+					return;
+				}
+				if (!hasUsableFolderPicker()) {
+					showTypedFolderDialog(false);
 					return;
 				}
 				try {
@@ -1130,6 +1183,10 @@ public class DescentActivity extends Activity implements SensorEventListener {
 
 	@SuppressWarnings("unused")
 	private void playMidi(String path, boolean looping) {
+		synchronized (mediaPlayer) {
+			redbookContinue = false;
+			mediaPlayer.setOnCompletionListener(null);
+		}
 		File file = new File(path);
 		FileDescriptor fd;
 		FileInputStream fos;
@@ -1167,8 +1224,35 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		return null;
 	}
 
+	/**
+	 * Plays a Redbook track. keepPlaying (level music): like the PC version's CD audio, when the
+	 * track ends the next one starts, through to the last track, then it wraps to the first level
+	 * track (04) -- instead of looping one track for the whole level. Otherwise (title/credits)
+	 * the track plays once.
+	 */
 	@SuppressWarnings("unused")
-	private boolean playRedbookTrack(int tracknum, boolean looping) {
+	private boolean playRedbookTrack(int tracknum, boolean keepPlaying) {
+		synchronized (mediaPlayer) {
+			redbookContinue = false;
+			mediaPlayer.setOnCompletionListener(null);
+			if (!startRedbookTrackLocked(tracknum)) {
+				return false;
+			}
+			if (keepPlaying) {
+				redbookContinue = true;
+				mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+					@Override
+					public void onCompletion(MediaPlayer mp) {
+						advanceRedbookTrack();
+					}
+				});
+			}
+			return true;
+		}
+	}
+
+	/** Loads and starts one track on the (idle) media player. Caller holds mediaPlayer's lock. */
+	private boolean startRedbookTrackLocked(int tracknum) {
 		File track = findRedbookTrack(tracknum);
 		if (track == null) {
 			return false;
@@ -1178,7 +1262,7 @@ public class DescentActivity extends Activity implements SensorEventListener {
 			in = new FileInputStream(track);
 			mediaPlayer.setDataSource(in.getFD());
 			mediaPlayer.prepare();
-		} catch (IOException e) {
+		} catch (IOException | IllegalStateException e) {
 			mediaPlayer.reset();
 			return false;
 		} finally {
@@ -1189,9 +1273,33 @@ public class DescentActivity extends Activity implements SensorEventListener {
 				}
 			}
 		}
-		mediaPlayer.setLooping(looping);
+		mediaPlayer.setLooping(false);
+		mediaPlayer.setVolume(musicVolume, musicVolume);
 		mediaPlayer.start();
+		redbookTrack = tracknum;
 		return true;
+	}
+
+	/** Completion callback (main thread): start the next imported track, wrapping to 04. */
+	private void advanceRedbookTrack() {
+		synchronized (mediaPlayer) {
+			if (!redbookContinue) {
+				return;
+			}
+			int highest = getRedbookTrackCount();
+			mediaPlayer.reset();
+			// Next track after this one; past the end, go back to the first level track. Skip any
+			// track numbers the user didn't import.
+			for (int i = 0, t = redbookTrack + 1; i <= highest; i++, t++) {
+				if (t > highest) {
+					t = REDBOOK_FIRST_LEVEL_TRACK;
+				}
+				if (startRedbookTrackLocked(t)) {
+					return;
+				}
+			}
+			redbookContinue = false;	// nothing playable
+		}
 	}
 
 	/** Highest imported Redbook track number, or 0 when no tracks have been imported. */
@@ -1213,12 +1321,17 @@ public class DescentActivity extends Activity implements SensorEventListener {
 
 	@SuppressWarnings("unused")
 	private void stopMusic() {
-		mediaPlayer.stop();
-		mediaPlayer.reset();
+		synchronized (mediaPlayer) {
+			redbookContinue = false;
+			mediaPlayer.setOnCompletionListener(null);
+			mediaPlayer.stop();
+			mediaPlayer.reset();
+		}
 	}
 
 	@SuppressWarnings("unused")
 	private void setMusicVolume(float volume) {
+		musicVolume = volume;
 		mediaPlayer.setVolume(volume, volume);
 	}
 

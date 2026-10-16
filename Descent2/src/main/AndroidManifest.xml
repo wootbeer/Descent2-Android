@@ -3,12 +3,20 @@
 	xmlns:tools="http://schemas.android.com/tools"
 	package="wootbeer.descent2"
 	android:installLocation="auto"
-	android:versionCode="5"
-	android:versionName="0.5">
+	android:versionCode="6"
+	android:versionName="0.6">
 
 	<!-- Only used by the typed-folder import on devices with no system folder picker (Android TV) -->
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+
+	<!-- Lets the app check whether a real folder picker exists (Android 11+ package visibility);
+	     Android TV often only has a stub that shows "You don't have an app for that". -->
+	<queries>
+		<intent>
+			<action android:name="android.intent.action.OPEN_DOCUMENT_TREE" />
+		</intent>
+	</queries>
 
 	<application
 		android:allowBackup="false"

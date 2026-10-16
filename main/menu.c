@@ -143,6 +143,7 @@ int Menu_draw_copyright = 0;
 // it off is what flips anything. See gamepad_remap.c's isInvertYEnabled() JNI getter.
 int Config_invert_y = 1;
 int Config_analog_look = 0;		// gamepad stick look is analog (scaled by the sensitivity slider) instead of on/off
+int Config_disable_thief = 0;		// "Disable thief bot": no thieves in single player; saved in the pilot file
 int Config_ship_bobbing = 1;		// the ship's idle up/down wiggle (PF_WIGGLE); saved in the pilot file
 
 // Android-side hooks -- Descent2/src/main/cpp/motion.c and gamepad_remap.c.
@@ -1306,7 +1307,7 @@ extern void GameLoop(int, int );
 #if defined(POLY_ACC)
 #define N_TOGGLE_ITEMS 6        // get rid of automap hi-res.
 #else
-#define N_TOGGLE_ITEMS 8
+#define N_TOGGLE_ITEMS 9
 #endif
 #else
 #define N_TOGGLE_ITEMS 7
@@ -1342,6 +1343,7 @@ extern void GameLoop(int, int );
 #endif
 #endif
 				ADD_CHECK(7, "Ship bobbing", Config_ship_bobbing);
+				ADD_CHECK(8, "Disable thief bot", Config_disable_thief);
 				//when adding more options, change N_TOGGLE_ITEMS above
 				
 #ifdef MACINTOSH
@@ -1358,6 +1360,7 @@ extern void GameLoop(int, int );
 				Guided_in_big_window		= m[4].value;
 				EscortHotKeys				= m[5].value;
 				Config_ship_bobbing			= m[7].value;
+				Config_disable_thief		= m[8].value;
 				
 				
 #ifdef MACINTOSH

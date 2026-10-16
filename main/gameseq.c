@@ -1971,6 +1971,8 @@ extern int BigWindowSwitch;
 
 extern void bash_to_shield (int,char *);
 
+extern int Config_disable_thief;	//menu.c
+
 void filter_objects_from_level()
 {
 	int i;
@@ -1982,6 +1984,10 @@ void filter_objects_from_level()
 	 if (Objects[i].type==OBJ_POWERUP)
 		 if (Objects[i].id==POW_FLAG_RED || Objects[i].id==POW_FLAG_BLUE)
 	   bash_to_shield (i,"Flag!!!!");
+
+	 //"Disable thief bot" pilot option (single player only -- this function isn't called in multi)
+	 if (Config_disable_thief && Objects[i].type==OBJ_ROBOT && Robot_info[Objects[i].id].thief)
+		 obj_delete(i);
 	}
 	
 }
