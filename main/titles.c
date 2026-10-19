@@ -160,6 +160,41 @@ int local_key_inkey(void)
 }
 #endif
 
+#ifdef ANDROID_NDK
+#include <android/log.h>
+#endif
+
+//	-----------------------------------------------------------------------------
+//	Android: older/other releases of DESCENT2.HOG don't always have the same title and briefing
+//	pictures as v1.2 (the game used to quit with "Error loading briefing screen"). Try the name
+//	given, then the low-res name (hi-res briefing pictures end in "b": brief01b.pcx -> brief01.pcx).
+//	Callers skip the picture instead of quitting if both fail.
+static int briefing_read_pcx(char *filename, grs_bitmap *bm, ubyte *palette)
+{
+	int pcx_error = pcx_read_bitmap(filename, bm, BM_LINEAR, palette);
+
+	if (pcx_error != PCX_ERROR_NONE) {
+		char alt[FILENAME_LEN+2];
+		char *dot;
+
+		strncpy(alt, filename, sizeof(alt)-1);
+		alt[sizeof(alt)-1] = 0;
+		dot = strrchr(alt, '.');
+		if (dot && dot > alt && (dot[-1] == 'b' || dot[-1] == 'B')) {
+			memmove(dot-1, dot, strlen(dot)+1);
+			if (bm->bm_data) { free(bm->bm_data); bm->bm_data = NULL; }
+			pcx_error = pcx_read_bitmap(alt, bm, BM_LINEAR, palette);
+		}
+	}
+	if (pcx_error != PCX_ERROR_NONE) {
+#ifdef ANDROID_NDK
+		__android_log_print(ANDROID_LOG_WARN, "Descent", "Briefing/title picture <%s> not found or unreadable (%s); skipping it", filename, pcx_errormsg(pcx_error));
+#endif
+		if (bm->bm_data) { free(bm->bm_data); bm->bm_data = NULL; }
+	}
+	return pcx_error;
+}
+
 int show_title_screen( char * filename, int allow_keys, int from_hog_only )
 {
 	fix timer;
@@ -177,10 +212,9 @@ int show_title_screen( char * filename, int allow_keys, int from_hog_only )
 	filename = new_filename;
 
 	title_bm.bm_data=NULL;
-	if ((pcx_error=pcx_read_bitmap( filename, &title_bm, BM_LINEAR, New_pal ))!=PCX_ERROR_NONE)	{
-		printf( "File '%s', PCX load error: %s (%i)\n  (No big deal, just no title screen.)\n",filename, pcx_errormsg(pcx_error), pcx_error);
-		mprintf((0, "File '%s', PCX load error: %s (%i)\n  (No big deal, just no title screen.)\n",filename, pcx_errormsg(pcx_error), pcx_error));
-		Error( "Error loading briefing screen <%s>, PCX load error: %s (%i)\n",filename, pcx_errormsg(pcx_error), pcx_error);
+	if ((pcx_error=briefing_read_pcx( filename, &title_bm, New_pal ))!=PCX_ERROR_NONE)	{
+		//(Android: just no title screen -- it used to quit here)
+		return 0;
 	}
 
 	memcpy(palette_save,gr_palette,sizeof(palette_save));
@@ -508,10 +542,10 @@ int load_briefing_screen( int screen_num )
 #ifdef OGLES
 	briefing_bm.bm_ogles_tex_id = 0;
 #endif
-	if ((pcx_error=pcx_read_bitmap( CurBriefScreenName, &briefing_bm, BM_LINEAR, New_pal ))!=PCX_ERROR_NONE)     {
-		printf( "File '%s', PCX load error: %s\n  (It's a briefing screen.  Does this cause you pain?)\n",Briefing_screens[screen_num].bs_name, pcx_errormsg(pcx_error));
-		printf(0, "File '%s', PCX load error: %s (%i)\n  (It's a briefing screen.  Does this cause you pain?)\n",Briefing_screens[screen_num].bs_name, pcx_errormsg(pcx_error), pcx_error);
-		Error( "Error loading briefing screen <%s>, PCX load error: %s (%i)\n",CurBriefScreenName, pcx_errormsg(pcx_error), pcx_error);
+	if ((pcx_error=briefing_read_pcx( CurBriefScreenName, &briefing_bm, New_pal ))!=PCX_ERROR_NONE)     {
+		//no picture: black background so the briefing text still shows (Android: used to quit here)
+		gr_clear_canvas(BM_XRGB(0, 0, 0));
+		return 0;
 	}
 
 	scale_bitmap(&briefing_bm, scale_pts, 0);
@@ -553,20 +587,23 @@ int load_new_briefing_screen( char *fname )
 #ifdef OGLES
 	briefing_bm.bm_ogles_tex_id = 0;
 #endif
-	if ((pcx_error=pcx_read_bitmap( fname, &briefing_bm, BM_LINEAR, New_pal ))!=PCX_ERROR_NONE)     {
-		printf( "File '%s', PCX load error: %s\n  (It's a briefing screen.  Does this cause you pain?)\n",fname, pcx_errormsg(pcx_error));
-		printf(0, "File '%s', PCX load error: %s (%i)\n  (It's a briefing screen.  Does this cause you pain?)\n",fname, pcx_errormsg(pcx_error), pcx_error);
-		Error( "Error loading briefing screen <%s>, PCX load error: %s (%i)\n",fname, pcx_errormsg(pcx_error), pcx_error);
-	}
+	if ((pcx_error=briefing_read_pcx( fname, &briefing_bm, New_pal ))!=PCX_ERROR_NONE)     {
+		//no picture: keep the current palette and show the text on black (Android: used to quit here)
+		memcpy(New_pal, gr_palette, sizeof(gr_palette));
+		gr_palette_load(New_pal);
+		gr_clear_canvas(BM_XRGB(0, 0, 0));
+	} else {
 	
 	gr_copy_palette(gr_palette, New_pal, sizeof(gr_palette));
 	gr_palette_load(New_pal);
 	gr_clear_canvas(BM_XRGB(0, 0, 0));
 	scale_bitmap( &briefing_bm, scale_pts, 0);
+	free(briefing_bm.bm_data);
 
 #ifdef OGLES
 	glDeleteTextures(1, &briefing_bm.bm_ogles_tex_id);
 #endif
+	}
 
 	if (gr_palette_fade_in( New_pal, 32, 0 ))
 		return 0;
@@ -849,11 +886,13 @@ int show_briefing_message(int screen_num, char *message)
 				strcat(bitmap_name, ".bbm");
 				guy_bitmap.bm_data = NULL;
 				iff_error = iff_read_bitmap(bitmap_name, &guy_bitmap, BM_LINEAR, temp_palette);
-				Assert(iff_error == IFF_NO_ERROR);
-				gr_remap_bitmap_good( &guy_bitmap, temp_palette, -1, -1 );
-				
-				show_briefing_bitmap(&guy_bitmap);
-				free(guy_bitmap.bm_data);
+				//Android: a missing picture in an older HOG is skipped instead of drawing garbage
+				if (iff_error == IFF_NO_ERROR) {
+					gr_remap_bitmap_good( &guy_bitmap, temp_palette, -1, -1 );
+					show_briefing_bitmap(&guy_bitmap);
+				}
+				if (guy_bitmap.bm_data)
+					free(guy_bitmap.bm_data);
 				prev_ch = 10;
 				//		   } else if (ch==EOF) {
 				//				done=1;

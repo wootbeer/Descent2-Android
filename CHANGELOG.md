@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.7 (10-19-2026)]
+
+### Fixed
+ - Older DESCENT2.HOG versions: a missing briefing or title picture is skipped (or the low-res one used) instead of closing the game
+
 ## [0.6 (10-15-2026)]
 
 ### Added
