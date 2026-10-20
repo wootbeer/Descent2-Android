@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.9 (10-20-2026)]
+
+### Fixed
+ - Game closed when starting a new game (or finishing a level) without the movie files (.MVL); missing movies are now skipped
+
 ## [0.8 (10-20-2026)]
 
 ### Added

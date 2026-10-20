@@ -345,7 +345,7 @@ int RunMovie(char *filename, int hires_flag, int must_have,int dx,int dy)
 	filehndl = open_movie_file(filename,must_have);
 
 	if (!filehndl) {
-		#ifndef EDITOR
+		#if !defined(EDITOR) && !defined(ANDROID_NDK)
 			if (must_have)
 			  {
 				strupr(filename);
@@ -354,6 +354,9 @@ int RunMovie(char *filename, int hires_flag, int must_have,int dx,int dy)
 			 else
 			  return MOVIE_NOT_PLAYED;
 		#else
+			//Android: the .MVL movie libraries are optional (see README), so a "required" movie
+			//(level intro PLA..PLG, exit escape movies, ending) is just skipped when missing.
+			//Callers already handle MOVIE_NOT_PLAYED (e.g. the rendered exit sequence is used).
 			return MOVIE_NOT_PLAYED;
 		#endif
 	}
