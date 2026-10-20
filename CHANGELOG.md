@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8 (10-20-2026)]
+
+### Added
+ - If the game closes on an error or crash, the reason is shown the next time it starts, for bug reports
+
 ## [0.7 (10-19-2026)]
 
 ### Fixed

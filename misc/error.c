@@ -148,6 +148,22 @@ void Error(char *fmt,...)
 
 	__android_log_print(ANDROID_LOG_FATAL, "DescentCrash", "Error() called -- %s", exit_message);
 
+	//Android: save the reason so the app can show it on the next launch (see
+	//DescentActivity.showLastCrashReport()) -- players can't easily read logcat.
+	{
+		extern const char *Document_path;
+		if (Document_path) {
+			char path[512];
+			FILE *f;
+			snprintf(path, sizeof(path), "%s/last_crash.txt", Document_path);
+			f = fopen(path, "w");
+			if (f) {
+				fprintf(f, "%s\n", exit_message[0] == '\n' ? exit_message + 1 : exit_message);
+				fclose(f);
+			}
+		}
+	}
+
 	if (!initialized) print_exit_message();
 
 	exit(1);

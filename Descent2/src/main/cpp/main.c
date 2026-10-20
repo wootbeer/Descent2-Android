@@ -3,6 +3,10 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <unwind.h>
@@ -51,6 +55,21 @@ static void crash_signal_handler(int sig) {
 
 	__android_log_print(ANDROID_LOG_FATAL, "DescentCrash",
 						 "Caught signal %d -- backtrace (%d frames):", sig, frame_count);
+
+	// Also save it for the next launch (DescentActivity.showLastCrashReport()), since players
+	// can't easily read logcat. Only our own library's frames are written -- that's the useful part.
+	int fd = -1;
+	if (Document_path) {
+		char path[512];
+		snprintf(path, sizeof(path), "%s/last_crash.txt", Document_path);
+		fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd >= 0) {
+			char line[256];
+			int n = snprintf(line, sizeof(line), "Crash (signal %d)\n", sig);
+			write(fd, line, n);
+		}
+	}
+
 	for (int i = 0; i < frame_count; ++i) {
 		Dl_info info;
 		if (dladdr(buffer[i], &info) && info.dli_fname) {
@@ -58,10 +77,20 @@ static void crash_signal_handler(int sig) {
 								 "  #%02d pc %p  %s (%s+%d)", i, buffer[i], info.dli_fname,
 								 info.dli_sname ? info.dli_sname : "??",
 								 info.dli_saddr ? (int) ((char *) buffer[i] - (char *) info.dli_saddr) : 0);
+			if (fd >= 0 && strstr(info.dli_fname, "descent")) {
+				char line[256];
+				int n = snprintf(line, sizeof(line), "  %s+%d\n",
+								 info.dli_sname ? info.dli_sname : "??",
+								 info.dli_saddr ? (int) ((char *) buffer[i] - (char *) info.dli_saddr) : 0);
+				write(fd, line, n);
+			}
 		} else {
 			__android_log_print(ANDROID_LOG_FATAL, "DescentCrash",
 								 "  #%02d pc %p  <unknown>", i, buffer[i]);
 		}
+	}
+	if (fd >= 0) {
+		close(fd);
 	}
 
 	// Restore default handling and re-raise so the process still dies normally.

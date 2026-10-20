@@ -177,11 +177,78 @@ public class DescentActivity extends Activity implements SensorEventListener {
 		// Create media player for MIDI
 		mediaPlayer = new MediaPlayer();
 
+		if (!showLastCrashReport()) {
+			startGameOrDataPicker();
+		}
+	}
+
+	private void startGameOrDataPicker() {
 		if (haveRequiredDataFiles()) {
 			launchGame();
 		} else {
 			showDataPicker(null);
 		}
+	}
+
+	/**
+	 * If the game closed on an error or crash last time, the native side saved the reason to
+	 * last_crash.txt (misc/error.c Error(), main.c crash handler). Show it once so the player can
+	 * report it, then delete it. Returns true if a report is showing; the game starts when it's
+	 * dismissed.
+	 */
+	private boolean showLastCrashReport() {
+		final File report = new File(getFilesDir(), "last_crash.txt");
+		if (!report.isFile()) {
+			return false;
+		}
+		StringBuilder text = new StringBuilder();
+		FileInputStream in = null;
+		try {
+			in = new FileInputStream(report);
+			byte[] buf = new byte[4096];
+			int n = in.read(buf);
+			if (n > 0) {
+				text.append(new String(buf, 0, n, "ISO-8859-1").trim());
+			}
+		} catch (IOException ignored) {
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (IOException ignored) {
+				}
+			}
+			report.delete();
+		}
+		if (text.length() == 0) {
+			return false;
+		}
+		String version = "?";
+		try {
+			version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+		} catch (Exception ignored) {
+		}
+		text.append("\n\nVersion ").append(version).append(", ").append(Build.MANUFACTURER).append(' ')
+				.append(Build.MODEL).append(", Android ").append(Build.VERSION.RELEASE);
+		text.append("\n\nPlease include this text when reporting the problem.");
+		try {
+			// (Dialog.setOnDismissListener rather than the Builder's, which needs API 17; minSdk is 14)
+			AlertDialog dialog = new AlertDialog.Builder(this)
+					.setTitle("Descent II closed unexpectedly last time")
+					.setMessage(text.toString())
+					.setPositiveButton("OK", null)
+					.create();
+			dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+				@Override
+				public void onDismiss(DialogInterface d) {
+					startGameOrDataPicker();
+				}
+			});
+			dialog.show();
+		} catch (RuntimeException e) {
+			return false;
+		}
+		return true;
 	}
 
 	/**
