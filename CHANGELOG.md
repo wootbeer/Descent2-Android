@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10 (10-28-2026)]
+
+### Added
+ - D-pad directions can be bound to actions in Remap Gamepad (menus still use them to navigate)
+
+### Fixed
+ - White menu backgrounds on some Mali TVs (wrong screen format picked)
+
 ## [0.9 (10-20-2026)]
 
 ### Fixed

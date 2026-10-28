@@ -192,7 +192,13 @@ GLuint ogles_save_screen() {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glGetError();	// discard anything left over from earlier calls
 	glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, grd_curscreen->sc_w, grd_curscreen->sc_h, 0);
+	if (glGetError() != GL_NO_ERROR) {
+		// Some framebuffer formats (e.g. 10-10-10-2 on a Mali TV) can't be copied into an RGB
+		// texture, which left this texture empty (solid white). Try RGBA instead.
+		glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, grd_curscreen->sc_w, grd_curscreen->sc_h, 0);
+	}
 	return tex;
 }
 

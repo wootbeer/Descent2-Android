@@ -257,6 +257,24 @@ JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_gamepadKeyBound(JN
 	return JNI_FALSE;
 }
 
+// True if keyCode is bound to an action. Unlike gamepadKeyBound() above this stays false
+// while the Remap Gamepad screen is merely open, so DescentView.java can use it to decide
+// whether a D-pad direction in gameplay should fire its bound action.
+JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_gamepadKeyAssigned(JNIEnv *env, jclass type, jint keyCode) {
+	int i;
+	for (i = 0; i < GP_NUM_ACTIONS; i++) {
+		if (Gamepad_bound_keycodes[i] == keyCode) {
+			return JNI_TRUE;
+		}
+	}
+	return JNI_FALSE;
+}
+
+// True while the Remap Gamepad screen is waiting for the player to press a button.
+JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_gamepadRemapCapturing(JNIEnv *env, jclass type) {
+	return Gamepad_remap_capturing ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_wootbeer_descent2_DescentView_isInRemapGamepadScreen(JNIEnv *env, jclass type) {
 	return (jboolean) Gamepad_remap_screen_active;
 }
@@ -315,6 +333,10 @@ static const char *gamepad_remap_bound_name(int keyCode) {
 		case GP_BUTTON_L1:     return "L1";
 		case GP_BUTTON_R1:     return "R1";
 		case GP_BUTTON_THUMBL: return "L3";
+		case 19:               return "D-Up";     // KEYCODE_DPAD_UP
+		case 20:               return "D-Down";   // KEYCODE_DPAD_DOWN
+		case 21:               return "D-Left";   // KEYCODE_DPAD_LEFT
+		case 22:               return "D-Right";  // KEYCODE_DPAD_RIGHT
 		case GP_TRIGGER_LT:    return "LT";
 		case GP_TRIGGER_RT:    return "RT";
 		case 98:               return "C";

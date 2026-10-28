@@ -79,6 +79,10 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	// edge-detection state from the gameplay fields above so the two dispatch sites
 	// never stomp on each other's "was this held last frame" tracking.
 	private boolean hatLeftDown, hatRightDown, hatUpDown, hatDownDown;
+	// Which D-pad directions (bit per dpadIndex()) were routed to a Remap Gamepad binding on
+	// press instead of the usual menu-nav/turn key, one mask per source (discrete key
+	// events vs. the hat axis) so each release goes back the same way its press went.
+	private int dpadKeyRawMask, dpadHatRawMask;
 	private boolean menuNavLeftDown, menuNavRightDown, menuNavUpDown, menuNavDownDown;
 	private boolean menuNavRsLeftDown, menuNavRsRightDown, menuNavRsUpDown, menuNavRsDownDown;
 	// Digital press/release synthesized from the LT/RT analog trigger axes crossing
@@ -208,6 +212,7 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	public void onInputDeviceRemoved(int deviceId) {
 		if (connectedGamepadIds.remove(deviceId)) {
 			setLookStick(0, 0);
+			releaseDpadBindings();
 			updateGamepadConnected();
 		}
 	}
@@ -258,10 +263,10 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			// the key events for this device's D-pad may simply never arrive. Routed
 			// straight to keyHandler() via the same dpadScancode() the KEYCODE_DPAD_*
 			// case uses, so both paths agree on menu-nav-vs-Modern-gameplay-backup.
-			hatLeftDown = updateDigitalAxis(hatLeftDown, hatX < -STICK_DEADZONE, dpadScancode(KeyEvent.KEYCODE_DPAD_LEFT));
-			hatRightDown = updateDigitalAxis(hatRightDown, hatX > STICK_DEADZONE, dpadScancode(KeyEvent.KEYCODE_DPAD_RIGHT));
-			hatUpDown = updateDigitalAxis(hatUpDown, hatY < -STICK_DEADZONE, dpadScancode(KeyEvent.KEYCODE_DPAD_UP));
-			hatDownDown = updateDigitalAxis(hatDownDown, hatY > STICK_DEADZONE, dpadScancode(KeyEvent.KEYCODE_DPAD_DOWN));
+			hatLeftDown = updateDpadHat(hatLeftDown, hatX < -STICK_DEADZONE, KeyEvent.KEYCODE_DPAD_LEFT);
+			hatRightDown = updateDpadHat(hatRightDown, hatX > STICK_DEADZONE, KeyEvent.KEYCODE_DPAD_RIGHT);
+			hatUpDown = updateDpadHat(hatUpDown, hatY < -STICK_DEADZONE, KeyEvent.KEYCODE_DPAD_UP);
+			hatDownDown = updateDpadHat(hatDownDown, hatY > STICK_DEADZONE, KeyEvent.KEYCODE_DPAD_DOWN);
 
 			// Both sticks always navigate any menu -- the standalone main/options/pause
 			// menus AND the in-game Options overlay opened mid-level (which never leaves
@@ -424,6 +429,69 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 		return isDown;
 	}
 
+	private static int dpadIndex(int keyCode) {
+		switch (keyCode) {
+			case KeyEvent.KEYCODE_DPAD_UP:    return 0;
+			case KeyEvent.KEYCODE_DPAD_DOWN:  return 1;
+			case KeyEvent.KEYCODE_DPAD_LEFT:  return 2;
+			default:                          return 3;
+		}
+	}
+
+	// One D-pad direction going down or up, from either a discrete KEYCODE_DPAD_* event
+	// (fromHat false) or the hat axis (fromHat true). While a menu is open it always means
+	// menu navigation; in actual gameplay a direction that has been bound to an action in
+	// Remap Gamepad triggers that action instead, otherwise it keeps doing what it always
+	// did (dpadScancode()). While the Remap Gamepad screen is waiting for a button, every
+	// direction is passed through so it can be captured. A release always goes the same
+	// way its press went, even if a menu opened in between. (Ported from Descent 1.)
+	private void dpadEvent(int keyCode, boolean down, boolean fromHat) {
+		int bit = 1 << dpadIndex(keyCode);
+		int mask = fromHat ? dpadHatRawMask : dpadKeyRawMask;
+		if (down) {
+			boolean raw = gamepadRemapCapturing()
+					|| (isInGame() && !isMenuOpen() && gamepadKeyAssigned(keyCode));
+			if (raw) {
+				mask |= bit;
+				gamepadButtonRaw(keyCode, true);
+			} else {
+				keyHandler(dpadScancode(keyCode), true);
+			}
+		} else if ((mask & bit) != 0) {
+			mask &= ~bit;
+			gamepadButtonRaw(keyCode, false);
+		} else {
+			keyHandler(dpadScancode(keyCode), false);
+		}
+		if (fromHat) {
+			dpadHatRawMask = mask;
+		} else {
+			dpadKeyRawMask = mask;
+		}
+	}
+
+	private boolean updateDpadHat(boolean wasDown, boolean isDown, int keyCode) {
+		if (isDown != wasDown) {
+			dpadEvent(keyCode, isDown, true);
+		}
+		return isDown;
+	}
+
+	// Lets go of any D-pad direction that is currently held as a bound action (controller
+	// unplugged), so its action key can't stay stuck down.
+	private void releaseDpadBindings() {
+		int[] dpadCodes = { KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+				KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT };
+		for (int code : dpadCodes) {
+			int bit = 1 << dpadIndex(code);
+			if (((dpadKeyRawMask | dpadHatRawMask) & bit) != 0) {
+				gamepadButtonRaw(code, false);
+			}
+		}
+		dpadKeyRawMask = 0;
+		dpadHatRawMask = 0;
+	}
+
 	// D-pad's target scancode for one direction, shared by both places the D-pad reaches
 	// this code (discrete KEYCODE_DPAD_* events in handleGamepadKey(), and the hat-axis
 	// fallback in onGenericMotionEvent()): while a menu is open (or in Standard layout)
@@ -526,11 +594,12 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 			case KeyEvent.KEYCODE_DPAD_RIGHT:
 				// Whenever a menu is open, D-pad always means menu navigation
 				// (KEY_UP/DOWN/LEFT/RIGHT) regardless of Stick Layout, so it can always
-				// reach and drive every menu. In actual gameplay it backs up whatever the
-				// left stick currently does under the active layout: turn/pitch in
+				// reach and drive every menu. In actual gameplay a direction bound to an
+				// action in Remap Gamepad does that action; otherwise it backs up whatever
+				// the left stick currently does under the active layout: turn/pitch in
 				// Standard (unchanged, same keys either way), strafe/thrust in Modern.
-				key = dpadScancode(keyCode);
-				break;
+				dpadEvent(keyCode, down, false);
+				return true;
 			default:
 				// Any other gamepad button -- e.g. a handheld's programmable M1/M2 back buttons
 				// -- is usable if the player bound it in Remap Gamepad (or the remap screen is
@@ -869,6 +938,14 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	 * and returns with no current context; native showRenderBuffer() checks for that and retries
 	 * once the surface is valid again.
 	 */
+	/** True if the config's red, green and blue channels are all exactly 8 bits. */
+	private static boolean isEightBitRgb(EGL10 egl, EGLDisplay display, EGLConfig config) {
+		int[] v = new int[1];
+		return egl.eglGetConfigAttrib(display, config, EGL10.EGL_RED_SIZE, v) && v[0] == 8
+				&& egl.eglGetConfigAttrib(display, config, EGL10.EGL_GREEN_SIZE, v) && v[0] == 8
+				&& egl.eglGetConfigAttrib(display, config, EGL10.EGL_BLUE_SIZE, v) && v[0] == 8;
+	}
+
 	private void initEgl() {
 		int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
 		int[] num_config = new int[1];
@@ -996,6 +1073,44 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 				android.util.Log.w("DescentGL", "No EGL config advertises preserved swap");
 			}
 		}
+		// eglChooseConfig() sorts configs with more colour bits first, so a GPU that offers a
+		// 10-10-10-2 config (the Mali in a Hisense TV does) hands that one back even though 8-bit
+		// was asked for. The saved-screen copies the menus depend on (glCopyTexImage2D() into an
+		// RGB texture) are then rejected with GL_INVALID_OPERATION and every menu background
+		// comes out solid white. So if the pick isn't plain 8-bit RGB, look through the rest for
+		// one that is -- preferring one that also supports preserved swap -- and only keep the
+		// original pick if there's no such config.
+		if (num_config[0] >= 1 && configs[0] != null && !isEightBitRgb(egl, eglDisplay, configs[0])) {
+			EGLConfig[] all = new EGLConfig[64];
+			int[] numAll = new int[1];
+			if (egl.eglChooseConfig(eglDisplay, configSpec, all, all.length, numAll)) {
+				EGLConfig eightBitPreserved = null;
+				EGLConfig eightBit = null;
+				for (int i = 0; i < numAll[0] && eightBitPreserved == null; i++) {
+					EGLConfig c = all[i];
+					if (c == null || !isEightBitRgb(egl, eglDisplay, c)) {
+						continue;
+					}
+					int[] st = new int[1];
+					if (!egl.eglGetConfigAttrib(eglDisplay, c, EGL_SURFACE_TYPE, st) || (st[0] & 0x0004) == 0) {
+						continue;	// must be usable with a window surface
+					}
+					if ((st[0] & EGL_SWAP_BEHAVIOR_PRESERVED_BIT) != 0) {
+						eightBitPreserved = c;
+					} else if (eightBit == null) {
+						eightBit = c;
+					}
+				}
+				EGLConfig better = eightBitPreserved != null ? eightBitPreserved : eightBit;
+				if (better != null) {
+					configs[0] = better;
+					android.util.Log.i("DescentGL", "Picked an 8-bit RGB config instead of the default pick"
+							+ (eightBitPreserved != null ? " (with preserved swap)" : " (no preserved swap)"));
+				} else {
+					android.util.Log.w("DescentGL", "No 8-bit RGB EGL config found; keeping the default pick");
+				}
+			}
+		}
 		eglConfig = configs[0];
 		if (num_config[0] < 1 || eglConfig == null) {
 			return;
@@ -1066,6 +1181,11 @@ public class DescentView extends SurfaceView implements KeyEvent.Callback, Surfa
 	private static native void setGamepadConnected(boolean connected);
 
 	private static native void gamepadButtonRaw(int keyCode, boolean down);
+	// True if this key code is bound to an action in Remap Gamepad (unlike gamepadKeyBound(),
+	// not true just because the remap screen is open).
+	private static native boolean gamepadKeyAssigned(int keyCode);
+	// True while the Remap Gamepad screen is waiting for the player to press a button.
+	private static native boolean gamepadRemapCapturing();
 
 	private static native boolean gamepadKeyBound(int keyCode);
 
