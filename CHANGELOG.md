@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12 (10-29-2026)]
+
+### Added
+ - Video Options: "Sprite Blending" (Default / Blend Off / Alpha Off) for devices that slow down when explosions or hit effects appear
+
 ## [0.11 (10-29-2026)]
 
 ### Fixed

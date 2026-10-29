@@ -8,6 +8,8 @@
 #include "rodogles.h"
 #include "oglestex.h"
 
+extern int Sprite_blend_mode;	// main/menu.c, Video Options "Sprite Blending"
+
 bool g3_draw_bitmap_ogles(g3s_point *pos, fix width, fix height, grs_bitmap *bm) {
 	GLfloat x0f, y0f, x1f, y1f, zf;
 	
@@ -29,6 +31,20 @@ bool g3_draw_bitmap_ogles(g3s_point *pos, fix width, fix height, grs_bitmap *bm)
 	// Same result on screen, same state as the walls.
 	GLfloat colors[] = { 1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f, 1.0f,
 						 1.0f, 1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f, 1.0f };
+	// "Sprite Blending" option: sprites are either fully solid or fully see-through, so
+	// blending and the alpha test each make the transparent parts disappear on their own.
+	// Some drivers are slow with one of them, so let the player turn either off.
+	//   1 Blend Off: alpha test only.
+	//   2 Alpha Off: blending only; no depth writes so the see-through corners can't hide
+	//     things behind (objects are already drawn far-to-near).
+	GLboolean was_blend = glIsEnabled(GL_BLEND);
+	GLboolean was_alpha = glIsEnabled(GL_ALPHA_TEST);
+	if (Sprite_blend_mode == 1) {
+		glDisable(GL_BLEND);
+	} else if (Sprite_blend_mode == 2) {
+		glDisable(GL_ALPHA_TEST);
+		glDepthMask(GL_FALSE);
+	}
 	glEnable(GL_TEXTURE_2D);
 	ogles_bm_bind_teximage_2d(bm);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -46,6 +62,12 @@ bool g3_draw_bitmap_ogles(g3s_point *pos, fix width, fix height, grs_bitmap *bm)
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);	// leave the current color as before, for anything that relies on it
+	if (Sprite_blend_mode == 1) {
+		if (was_blend) glEnable(GL_BLEND);
+	} else if (Sprite_blend_mode == 2) {
+		if (was_alpha) glEnable(GL_ALPHA_TEST);
+		glDepthMask(GL_TRUE);
+	}
 	return 0;
 }
 

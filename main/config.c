@@ -83,6 +83,7 @@ static char *movie_hires_str = "MovieHires";
 static char *render_scale_str = "RenderScale";
 static char *aspect_ratio_43_str = "AspectRatio43";
 static char *framerate_on_str = "ShowFPS";
+static char *sprite_blend_str = "SpriteBlend";
 
 #define _CRYSTAL_LAKE_8_ST		0xe201
 #define _CRYSTAL_LAKE_16_ST	0xe202
@@ -117,6 +118,7 @@ extern byte	Object_complexity, Object_detail, Wall_detail, Wall_render_depth, De
 extern int Render_scale_index;
 extern int Aspect_ratio_4_3;
 extern int framerate_on;
+extern int Sprite_blend_mode;
 
 void set_custom_detail_vars(void);
 
@@ -301,6 +303,11 @@ int ReadConfigFile()
 			else if (!strcmp(token, framerate_on_str)) {
 				framerate_on = strtol(value, NULL, 10) ? 1 : 0;
 			}
+			else if (!strcmp(token, sprite_blend_str)) {
+				Sprite_blend_mode = strtol(value, NULL, 10);
+				if (Sprite_blend_mode < 0 || Sprite_blend_mode > 2)
+					Sprite_blend_mode = 0;
+			}
 			else if (!strcmp(token, joystick_min_str))	{
 				sscanf( value, "%d,%d,%d,%d", &joy_axis_min[0], &joy_axis_min[1], &joy_axis_min[2], &joy_axis_min[3] );
 			} 
@@ -475,6 +482,8 @@ int WriteConfigFile()
 	sprintf (str, "%s=%d\n", aspect_ratio_43_str, Aspect_ratio_4_3);
 	fputs(str, infile);
 	sprintf (str, "%s=%d\n", framerate_on_str, framerate_on);
+	fputs(str, infile);
+	sprintf (str, "%s=%d\n", sprite_blend_str, Sprite_blend_mode);
 	fputs(str, infile);
 	sprintf (str, "%s=%d,%d,%d,%d\n", joystick_min_str, joy_axis_min[0], joy_axis_min[1], joy_axis_min[2], joy_axis_min[3] );
 	fputs(str, infile);

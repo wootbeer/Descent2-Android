@@ -581,6 +581,14 @@ static int Video_settings_dirty = 0;
 // In-game FPS counter (main/game.c) as a normal persisted option.
 extern int framerate_on;
 
+// "Sprite Blending" (Video Options): how explosion/hit effect sprites are drawn -- see
+// g3_draw_bitmap_ogles() in 3d/ogles/rodogles.c. 0 = Default (blending + alpha test),
+// 1 = Blend Off (alpha test only), 2 = Alpha Off (blending only, no depth writes).
+// Looks the same either way; it's for GPUs/drivers that are slow with one of them
+// (Snapdragon 8 Gen 3). Takes effect immediately. Persisted via config.c.
+int Sprite_blend_mode = 0;
+static const char *Sprite_blend_names[3] = { "Default", "Blend Off", "Alpha Off" };
+
 byte    Render_depths[NUM_DETAIL_LEVELS-1] =                        { 6,  9, 12, 15, 50};
 byte    Max_perspective_depths[NUM_DETAIL_LEVELS-1] =               { 1,  2,  3,  5,  8};
 byte    Max_linear_depths[NUM_DETAIL_LEVELS-1] =                    { 3,  5,  7, 10, 50};
@@ -825,7 +833,19 @@ void do_detail_level_menu_custom(void)
 		m[5 + title_extra].text = "Show FPS Counter";
 		m[5 + title_extra].value = framerate_on;
 
-		s = newmenu_do1(NULL, "Video Options", 6 + title_extra, m, do_detail_level_menu_custom_menuset, s);
+		{
+			static char sprite_blend_text[40];
+			if (Sprite_blend_mode < 0 || Sprite_blend_mode > 2) Sprite_blend_mode = 0;
+			sprintf(sprite_blend_text, "Sprite Blending: %s", Sprite_blend_names[Sprite_blend_mode]);
+			m[6 + title_extra].type = NM_TYPE_MENU;
+			m[6 + title_extra].text = sprite_blend_text;
+		}
+
+		s = newmenu_do1(NULL, "Video Options", 7 + title_extra, m, do_detail_level_menu_custom_menuset, s);
+
+		//selecting "Sprite Blending" steps to the next mode; the menu then reopens on it
+		if (s == 6 + title_extra)
+			Sprite_blend_mode = (Sprite_blend_mode + 1) % 3;
 	} while (s > -1);
 
 	set_custom_detail_vars();
