@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11 (10-29-2026)]
+
+### Fixed
+ - Big slowdown on Snapdragon 8 Gen 3 (Adreno 750) whenever an explosion or laser hit effect was on screen
+
 ## [0.10 (10-28-2026)]
 
 ### Added
